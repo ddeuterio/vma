@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:latest
+    restart: always
+    env_file:
+    - .env
+    volumes:
+    - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    - pgdata:/var/lib/postgresql/data
+
+  init_db:
+    image: vma:latest
+    env_file:
+    - .env
+    command: ["-i"]
+    depends_on:
+    - db
+
+  rev_proxy:
+    build:
+      context: rev_proxy/
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+    - "8443:443"
+    - "8080:80"
+    depends_on:
+        init_db:
+            condition: service_completed_successfully
+
+  web:
+    image: web:latest
+    env_file:
+    - .env
+    depends_on:
+    -   rev_proxy
+
+volumes:
+  pgdata:

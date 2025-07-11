@@ -1,0 +1,30 @@
+FROM python:3.12-slim AS builder
+
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:$PATH"
+
+RUN apt-get update && apt-get install -y curl build-essential && \
+    python -m venv $VIRTUAL_ENV && \
+    curl -sSL https://install.python-poetry.org | python3 - && \
+    ln -s /root/.local/bin/poetry /usr/local/bin/poetry
+
+WORKDIR /vma
+
+COPY pyproject.toml poetry.lock ./
+RUN poetry install --no-root --only main
+
+COPY . .
+RUN poetry build
+
+
+FROM python:3.12-slim AS prod
+
+WORKDIR /vma
+
+COPY --from=builder /vma/dist/*.whl ./
+
+RUN pip install *.whl && rm *.whl
+RUN pip install gunicorn
+
+COPY wsgi.py .
+ENTRYPOINT ["gunicorn", "-b", "0.0.0.0:80", "wsgi:app"]
