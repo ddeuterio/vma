@@ -17,7 +17,6 @@ Create an .env file with the following parameters and store it inside the docker
     DB_USER=
     DB_PASS=
     DB_NAME=
-    DB_HOST=localhost
     NVD_API_KEY=
     POSTGRES_USER=
     POSTGRES_PASSWORD=
