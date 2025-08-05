@@ -139,7 +139,7 @@ function createCVECard(cve, idx) {
                     return node.nodes.map(item => {
                         const negate = item.negate
                         const operator = item.operator
-                        let res = `Product`
+                        let res = `<div class="field-value"> Product`
                         if (negate) {
                             res += ` is NOT and`
                         }
@@ -147,7 +147,7 @@ function createCVECard(cve, idx) {
                         if (operator === "OR") {
                             res += ` complies with ANY of the CPE match: <br>`
                         } else {
-                            res += `complies with ALL of the CPE match: <br>`
+                            res += ` complies with ALL of the CPE match: <br>`
                         }
                         
                         item.cpeMatch.map(cpe => {
@@ -162,6 +162,7 @@ function createCVECard(cve, idx) {
 
                             res += `<br>`
                         })
+                        res += `</div>`
                         return res
                     })
                 }).join('')}
