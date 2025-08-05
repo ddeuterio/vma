@@ -64,6 +64,8 @@ function displayResults(results) {
         // cveCard.style.animationDelay = `${index * 0.1}s`;
         resultsContainer.appendChild(cveCard);
     });
+
+    resultsContainer.style.display = 'block';
 }
 
 function createCVECard(cve, idx) {
@@ -137,19 +139,28 @@ function createCVECard(cve, idx) {
                     return node.nodes.map(item => {
                         const negate = item.negate
                         const operator = item.operator
-                        let res = `Product `
+                        let res = `Product`
                         if (negate) {
-                            res += `is NOT and `
+                            res += ` is NOT and`
                         }
 
                         if (operator === "OR") {
-                            res += `complies with ANY of the CPE match: <br>`
+                            res += ` complies with ANY of the CPE match: <br>`
                         } else {
                             res += `complies with ALL of the CPE match: <br>`
                         }
                         
                         item.cpeMatch.map(cpe => {
-                            res += `${cpe.criteria} FROM (including) ${cpe.versionStartIncluding} TO (excluding) ${cpe.versionEndExcluding} <br>`
+                            res += `${cpe.criteria}`
+                            if (!(cpe.versionStartIncluding === undefined)) {
+                                res += ` FROM (including) ${cpe.versionStartIncluding}`
+                            }
+
+                            if (!(cpe.versionEndExcluding === undefined)) {
+                                res += ` TO (excluding) ${cpe.versionEndExcluding}`
+                            }
+
+                            res += `<br>`
                         })
                         return res
                     })
