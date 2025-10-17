@@ -51,10 +51,11 @@ queries = {
             chcksum = EXCLUDED.chcksum;    
     """,
     'insert_product': 'INSERT INTO products (id, description) VALUES (%s, %s) RETURNING id;',
-    'insert_image': 'INSERT INTO images (name, version, product) VALUES (%s, %s, %s) RETURNING id;',
+    'insert_image': 'INSERT INTO images (name, version, product) VALUES (%s, %s, %s) RETURNING name, version, product;',
     'insert_image_vulnerabilities': """
-        INSERT INTO image_vulnerabilities (id, vuln_id, first_seen, last_seen, affected_component, affected_path)
-        ON CONFLICT (id, vuln_id)
+        INSERT INTO image_vulnerabilities (image_name, image_version, product, cve, fix_versions, first_seen, last_seen, affected_component_type, affected_component, affected_version, affected_path)
+        VALUES %s
+        ON CONFLICT (image_name, image_version, product, cve, affected_component_type, affected_component)
         DO UPDATE SET
             last_seen = EXCLUDED.last_seen;
     """,
@@ -87,7 +88,7 @@ queries = {
             vulnerabilities.cve_id ILIKE %s;
     """,
     'get_product': "SELECT id, description FROM products WHERE id = %s;",
-    'get_image': "SELECT name, version, product FROM images WHERE id = %s;",
+    'get_image': "SELECT name, version, product FROM images WHERE name = %s AND version = %s AND product = %s;",
     'get_image_vulnerabilities': """
         SELECT
             images.name,
@@ -344,9 +345,9 @@ def insert_image(values):
                 conn.commit()
                 _logger.debug(f"New image with name {values} was created")
     except psql.Error as e:
-        _logger.error(f"insert_product; psql error: {e}")
+        _logger.error(f"insert_image; psql error: {e}")
     except Exception as e:
-        _logger.error(f"insert_product; db error: {e}")
+        _logger.error(f"insert_image; db error: {e}")
     return res
 
 
@@ -364,7 +365,7 @@ def insert_image_vulnerabilities(values):
     try:
         with psql.connect(host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass) as conn:
             with conn.cursor() as cur:
-                cur.execute(queries['insert_image_vulnerabilities'], values)
+                execute_values(cur, queries['insert_image_vulnerabilities'], values)
                 conn.commit()
                 _logger.debug(f"{values[2]} binded with {values[0]}")
     except psql.Error as e:
@@ -398,12 +399,12 @@ def get_product(value):
 
     return res
 
-def get_image(value):
+def get_image(values):
     """
-    Get the image based on the id
+    Get the image based on (name, version, product)
 
     Args:
-        value: image id
+        values: tuple with (name, version, product)
     
     Returns:
         Details for the image
@@ -412,7 +413,7 @@ def get_image(value):
     try:
         with psql.connect(host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass) as conn:
             with conn.cursor() as cur:
-                cur.execute(queries['get_image'], value)
+                cur.execute(queries['get_image'], values)
                 res = cur.fetchone()
     except psql.Error as e:
         _logger.error(f"psql error: {e}")
