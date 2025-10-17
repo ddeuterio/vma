@@ -18,7 +18,8 @@ def parse_grype_report(metadata, path):
     ret = []
     for vuln in json_data['matches']:
         v_data = []
-        v_data.append(metadata)
+        for val in metadata:
+            v_data.append(val)
 
         v_data.append(vuln['vulnerability']['id'])
 
