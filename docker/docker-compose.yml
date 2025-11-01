@@ -12,7 +12,7 @@ services:
     image: vma:latest
     env_file:
     - .env
-    command: ["-i"]
+    command: ["cve", "--init"]
     depends_on:
     - db
 

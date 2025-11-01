@@ -26,5 +26,20 @@ COPY --from=builder /vma/dist/*.whl ./
 RUN pip install *.whl && rm *.whl
 RUN pip install gunicorn
 
-COPY wsgi.py .
-ENTRYPOINT ["gunicorn", "-b", "0.0.0.0:80", "wsgi:app"]
+ENTRYPOINT [ \
+    "gunicorn", \
+    "vma.web.web:app", \
+    "-k", \
+    "uvicorn.workers.UvicornWorker", \
+    "--forwarded-allow-ips=*", \
+    "-w", \
+    "4", \
+    "-b", \
+    "0.0.0.0:80", \
+    "--timeout", \
+    "60", \
+    "--graceful-timeout", \
+    "30", \
+    "--keep-alive", \
+    "5" \
+]
