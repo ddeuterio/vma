@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VMA</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ request.url_for('static', path='css/styles.css') }}">
+</head>
+<body>
+    <nav class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Toggle navigation">
+                <i class="fas fa-bars"></i>
+            </button>
+            <h3>VMA</h3>
+        </div>
+        <ul class="nav-menu">
+            <li class="nav-item">
+                <a class="nav-link" href="/" data-route="dashboard">
+                    <i class="fas fa-tachometer-alt"></i>
+                    <span>Dashboard</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link nav-link--button" type="button" data-route="products">
+                    <i class="fas fa-cube"></i>
+                    <span>Products</span>
+                </button>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="/images" data-route="images">
+                    <i class="fas fa-layer-group"></i>
+                    <span>Images</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="/cve" data-route="cve">
+                    <i class="fas fa-search"></i>
+                    <span>CVE Search</span>
+                </a>
+            </li>
+        </ul>
+    </nav>
+
+    <main class="main-content" id="mainContent">
+        <header class="content-header">
+            <h1 id="pageTitle">Dashboard</h1>
+            <div class="content-header__actions">
+                <button
+                    type="button"
+                    class="theme-toggle"
+                    data-theme-toggle
+                    aria-pressed="false"
+                    title="Switch theme"
+                >
+                    <i class="fas fa-moon theme-toggle__icon" aria-hidden="true"></i>
+                    <span class="theme-toggle__label">Dark mode</span>
+                </button>
+            </div>
+        </header>
+        <div class="content-body">
+            <noscript>
+                <p>This application requires JavaScript to function. Please enable it in your browser.</p>
+            </noscript>
+            <div id="vmaContent"></div>
+        </div>
+    </main>
+
+    <script defer src="{{ request.url_for('static', path='js/main.js') }}"></script>
+    <script defer src="{{ request.url_for('static', path='js/sidebar.js') }}"></script>
+    <script defer src="{{ request.url_for('static', path='js/dashboard.js') }}"></script>
+    <script defer src="{{ request.url_for('static', path='js/image.js') }}"></script>
+    <script defer src="{{ request.url_for('static', path='js/product.js') }}"></script>
+    <script defer src="{{ request.url_for('static', path='js/cve.js') }}"></script>
+</body>
+</html>
