@@ -2,7 +2,7 @@
 VMA
 ===
 
-Your local CVE database.
+Your Vulnerability Management Application (+ your CVE database).
 
 Installation
 ============
