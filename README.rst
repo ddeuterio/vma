@@ -55,4 +55,4 @@ In the following example, the job will run at 2 am every day:
 
 ::
     
-    0 2 * * * docker run --rm --env-file <put here the path to your env file> vma -i
+    0 2 * * * docker run --rm --env-file <put here the path to your env file> vma cve --update
