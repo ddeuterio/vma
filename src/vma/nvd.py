@@ -1,21 +1,22 @@
-from datetime import datetime, timedelta
-import logging
-from dotenv import load_dotenv
 import os
 import requests
-from psycopg2.extras import Json
-import vma.connector as c
 import gzip
 import shutil
-import os
-from ratelimit import limits, sleep_and_retry
 import json
+
+from dotenv import load_dotenv
+from loguru import logger
+from datetime import datetime, timedelta
+from psycopg2.extras import Json
+from ratelimit import limits, sleep_and_retry
+
+import vma.connector as c
+
 
 load_dotenv()
 
 _api_key = os.getenv('NVD_API_KEY')
 
-_logger = logging.getLogger(__name__)
 PERIOD = 30
 MAX_REQ = 50
 MAX_RETRIES = 3
@@ -45,7 +46,7 @@ def nvd_api_call(url, stream=None):
         i += 1
     
     if (i >= MAX_RETRIES) or (not r.status_code == 200):
-        _logger.debug(f"could not perform the API call: {r.status_code} {url}")
+        logger.debug(f"could not perform the API call: {r.status_code} {url}")
         raise Exception(f"could not perform the API call: {r.status_code} {url}")
     return r
 
@@ -75,7 +76,7 @@ def download_and_extract_gz(url):
             shutil.copyfileobj(f_in, f_out)
 
     os.remove(f_name)
-    _logger.debug(f"file saved in disk: {f_name_json}")
+    logger.debug(f"file saved in disk: {f_name_json}")
     return f_name_json
 
 
@@ -117,7 +118,7 @@ def get_modified_cves():
 
     r.close()
     
-    _logger.debug(f"data_iso: {data_iso}; last_date: {last_date}")
+    logger.debug(f"data_iso: {data_iso}; last_date: {last_date}")
     
     if (not last_date) or (data_iso > last_date):
         if (data_iso - last_date) > timedelta(days=7):
@@ -146,9 +147,9 @@ def get_modified_cves():
             meta = [('recent', data_iso, (r.text.splitlines()[-1]).split('sha256:')[1])]
         
         insert_vulnerabilities(meta, f_json)
-        _logger.info("CVE DB updated with the latest changes")
+        logger.info("CVE DB updated with the latest changes")
     else:
-        _logger.info("No CVE updates, nothing was done")
+        logger.info("No CVE updates, nothing was done")
 
 
 def download_selected_cves(years):
@@ -239,7 +240,7 @@ def parse_nvd_data(data):
                 p_data_cvss.append((id, src['source'], src['cvssData']['version'], src['cvssData']['vectorString'], src['cvssData']['baseScore'], base_severity))
         
         p_data_cve.append((id, sid, pub, last_mod, status, references, descriptions, weaknesses, config))
-    _logger.info(f"{len(p_data_cve)} CVEs has been parsed")
+    logger.info(f"{len(p_data_cve)} CVEs has been parsed")
     return [p_data_cve, p_data_cvss]
 
 

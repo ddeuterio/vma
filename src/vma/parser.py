@@ -1,15 +1,15 @@
-import logging
 import json
+
+from loguru import logger
 from datetime import datetime
 
-_logger = logging.getLogger(__name__)
 
-def parse_grype_report(metadata, path):
+def grype_parse_report(metadata, path):
     """
     Args:
         path: path to the json grype report
     Returns:
-        List with the values to be inserted in to the db except for the product, the image name and the image version
+        [] List with the values to be inserted in to the db except for the product, the image name and the image version
     """
     json_data = None
     with open(path, 'r') as f:
@@ -42,19 +42,21 @@ def parse_grype_report(metadata, path):
         v_data.append(locations[:-1])
 
         ret.append(v_data)
+    logger.debug(f"A total of {len(ret)} CVEs has been identified when parsing")
     return ret
 
 
-def get_image_metadata(path):
+def grype_get_image_metadata(path):
     """
     Args:
         path: path to the json grype report
     Returns:
-        List with [image_name, image_version]
+        [image_name, image_version]
     """
     json_data = None
 
     with open(path, 'r') as f:
         json_data = json.load(f)
 
+    logger.debug(f"Distro name: {json_data['distro']['name']}; Distro version: {json_data['distro']['version']}")
     return [json_data['distro']['name'], json_data['distro']['version']]
