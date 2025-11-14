@@ -1,0 +1,15 @@
+name: VMA CI
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+jobs:
+  ci:
+    uses: ddeuterio/vma-gh-workflows/.github/workflows/ci.yml@main
+    secrets: inherit
+    with:
+      config-file-path: .github/config.yml
