@@ -9,7 +9,7 @@ on:
       - main
 jobs:
   ci:
-    uses: ddeuterio/vma-gh-workflows/.github/workflows/ci.yml@main
+    uses: ddeuterio/vma-gh-workflow/.github/workflows/ci.yml@main
     secrets: inherit
     with:
       config-file-path: .github/config.yml
