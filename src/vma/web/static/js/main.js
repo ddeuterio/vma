@@ -6,6 +6,14 @@
         images: '/images',
         cve: '/cve'
     };
+    const authState = {
+        accessToken: null,
+        refreshPromise: null,
+        claims: null
+    };
+    const logoutState = {
+        pending: false
+    };
 
     const routeHandlers = new Map();
     let navigationInitialised = false;
@@ -43,15 +51,154 @@
         }
     }
 
-    async function fetchJSON(url, options = {}) {
-        const response = await fetch(url, {
-            headers: {
-                Accept: 'application/json',
-                'Content-Type': 'application/json',
-                ...(options.headers || {})
-            },
-            ...options
+    function decodeJwtPayload(token) {
+        if (typeof token !== 'string' || !token.includes('.')) {
+            return null;
+        }
+        const segments = token.split('.');
+        if (segments.length < 2) {
+            return null;
+        }
+        try {
+            const normalized = segments[1].replace(/-/g, '+').replace(/_/g, '/');
+            const padded = normalized.padEnd(normalized.length + (4 - (normalized.length % 4)) % 4, '=');
+            const decoded = atob(padded);
+            return JSON.parse(decoded);
+        } catch (error) {
+            console.warn('Unable to decode access token payload.', error);
+            return null;
+        }
+    }
+
+    function setAccessToken(token) {
+        if (typeof token === 'string' && token.trim()) {
+            authState.accessToken = token.trim();
+            authState.claims = decodeJwtPayload(authState.accessToken);
+        } else {
+            authState.accessToken = null;
+            authState.claims = null;
+        }
+    }
+
+    function getAccessToken() {
+        return authState.accessToken;
+    }
+
+    function clearAccessToken() {
+        authState.accessToken = null;
+        authState.claims = null;
+    }
+
+    function handleSessionExpired(message = 'Session expired. Please sign in again.', options = {}) {
+        const { throwError = true } = options;
+        clearAccessToken();
+        window.location.replace('/');
+        if (throwError) {
+            throw new Error(message);
+        }
+    }
+
+    function hydrateAccessTokenFromDom() {
+        const body = document.body;
+        if (!body || !body.dataset) {
+            return;
+        }
+        const token = body.dataset.accessToken || '';
+        if (token) {
+            setAccessToken(token);
+        }
+        delete body.dataset.accessToken;
+        body.removeAttribute('data-access-token');
+    }
+
+    function getUserClaims() {
+        return authState.claims || null;
+    }
+
+    function getUserScope() {
+        const claims = getUserClaims();
+        if (!claims || typeof claims.scope !== 'object' || claims.scope === null) {
+            return {};
+        }
+        return claims.scope;
+    }
+
+    function isRootUser() {
+        return Boolean(getUserClaims()?.root);
+    }
+
+    function hasTeamPermission(team, permissions = []) {
+        if (isRootUser()) {
+            return true;
+        }
+        if (!team) {
+            return false;
+        }
+        const scope = getUserScope();
+        const value = String(scope?.[team] || '').toLowerCase();
+        if (!value) {
+            return false;
+        }
+        if (!Array.isArray(permissions) || !permissions.length) {
+            return Boolean(value);
+        }
+        return permissions
+            .map(permission => String(permission || '').toLowerCase())
+            .includes(value);
+    }
+
+    function getTeamsByPermission(permissions = []) {
+        const scope = getUserScope();
+        const entries = Object.entries(scope);
+        if (!entries.length) {
+            return [];
+        }
+        return entries
+            .filter(([team]) => hasTeamPermission(team, permissions))
+            .map(([team, permission]) => ({
+                name: team,
+                permission,
+            }));
+    }
+
+    function getWritableTeams() {
+        return getTeamsByPermission(['write', 'admin']);
+    }
+
+    function applyRootVisibility() {
+        const isRoot = isRootUser();
+        document.querySelectorAll('[data-admin-only]').forEach(element => {
+            element.hidden = !isRoot;
         });
+    }
+
+    function buildAuthHeaders(customHeaders = {}) {
+        const headers = {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            ...(customHeaders || {})
+        };
+        const token = getAccessToken();
+        if (token) {
+            headers.Authorization = `Bearer ${token}`;
+        } else {
+            delete headers.Authorization;
+        }
+        return headers;
+    }
+
+    async function authFetch(url, options = {}) {
+        const requestOptions = {
+            ...options,
+            headers: buildAuthHeaders(options.headers)
+        };
+
+        let response = await fetch(url, requestOptions);
+        return response;
+    }
+
+    async function fetchJSON(url, options = {}) {
+        const response = await authFetch(url, options);
 
         if (!response.ok) {
             let message = `Request failed (${response.status})`;
@@ -84,6 +231,72 @@
             return `${API_BASE}/${path}`;
         }
         return `${API_BASE}${path}`;
+    }
+
+    async function refreshAccessToken() {
+        if (authState.refreshPromise) {
+            return authState.refreshPromise;
+        }
+
+        authState.refreshPromise = (async () => {
+            const response = await fetch(apiUrl('/refresh_token'), {
+                headers: { Accept: 'application/json' },
+                credentials: 'same-origin'
+            });
+
+            if (!response.ok) {
+                throw new Error('Unable to refresh session.');
+            }
+
+            const payload = await response.json();
+            if (!payload || !payload.access_token) {
+                throw new Error('Unable to refresh session.');
+            }
+
+            setAccessToken(payload.access_token);
+            return payload.access_token;
+        })();
+
+        try {
+            return await authState.refreshPromise;
+        } finally {
+            authState.refreshPromise = null;
+        }
+    }
+
+    async function logout() {
+        if (logoutState.pending) {
+            return;
+        }
+        logoutState.pending = true;
+
+        const logoutButton = document.querySelector('[data-logout]');
+        if (logoutButton) {
+            logoutButton.disabled = true;
+            logoutButton.setAttribute('aria-busy', 'true');
+        }
+
+        try {
+            const response = await fetch(apiUrl('/logout'), {
+                method: 'GET',
+                headers: { Accept: 'application/json' },
+                credentials: 'same-origin',
+                cache: 'no-store'
+            });
+            if (!response.ok && response.status !== 404) {
+                console.warn(`Logout request failed with status ${response.status}`);
+            }
+        } catch (error) {
+            console.warn('Logout request failed', error);
+        } finally {
+            logoutState.pending = false;
+            if (logoutButton) {
+                logoutButton.disabled = false;
+                logoutButton.removeAttribute('aria-busy');
+            }
+        }
+
+        handleSessionExpired('You have been signed out.', { throwError: false });
     }
 
     function setPageTitle(text) {
@@ -276,6 +489,17 @@
         });
     }
 
+    function initSessionControls() {
+        const logoutTrigger = document.querySelector('[data-logout]');
+        if (!logoutTrigger) {
+            return;
+        }
+        logoutTrigger.addEventListener('click', event => {
+            event.preventDefault();
+            logout();
+        });
+    }
+
     const utils = {
         createElementWithAttrs,
         clearElement,
@@ -292,18 +516,60 @@
         initNavigation
     };
 
+    const auth = {
+        getAccessToken,
+        setAccessToken,
+        clearAccessToken,
+        refreshAccessToken,
+        handleSessionExpired,
+        logout,
+        getUserClaims,
+        getScope: getUserScope,
+        getWritableTeams,
+        isRoot: isRootUser,
+        hasTeamPermission,
+        getTeamsByPermission
+    };
+
     window.vmaUtils = utils;
     window.vmaRouter = router;
+    window.vmaAuth = auth;
 
-    function initApp() {
+    async function bootstrapAccessToken() {
+        hydrateAccessTokenFromDom();
+        if (getAccessToken()) {
+            return true;
+        }
+        try {
+            await refreshAccessToken();
+            return Boolean(getAccessToken());
+        } catch (error) {
+            // refreshAccessToken already handles session expiration
+            return false;
+        }
+    }
+
+    async function initApp() {
+        const ready = await bootstrapAccessToken();
+        if (!ready) {
+            return;
+        }
+        applyRootVisibility();
         initTheme();
         initThemeControls();
+        initSessionControls();
         initNavigation();
     }
 
+    function scheduleInit() {
+        initApp().catch(error => {
+            console.error('Failed to initialise VMA SPA', error);
+        });
+    }
+
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initApp);
+        document.addEventListener('DOMContentLoaded', scheduleInit, { once: true });
     } else {
-        initApp();
+        scheduleInit();
     }
 })();
