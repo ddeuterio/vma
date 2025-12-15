@@ -55,3 +55,6 @@ MANIFEST
 .env
 tests/*
 dev-docker/*
+
+# Agents
+AGENTS.md
