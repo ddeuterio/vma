@@ -53,8 +53,4 @@ MANIFEST
 .conda*/
 .python-version
 .env
-tests/*
 dev-docker/*
-
-# Agents
-AGENTS.md
