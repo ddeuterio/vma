@@ -6,6 +6,7 @@ from loguru import logger
 from pathlib import Path
 from httpx import AsyncClient
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -124,6 +125,7 @@ def create_web_app():
     async def spa_fallback(
         request: Request,
         full_path: str,
+        user_data: mod_v1.JwtData | None = Depends(a.is_authenticated),
     ) -> Any:
         if (
             full_path.startswith("api/")
@@ -131,6 +133,11 @@ def create_web_app():
             or full_path == "favicon.ico"
         ):
             raise HTTPException(status_code=404)
+
+        if user_data is None:
+            logger.debug(f"Unauthenticated access to {full_path}, redirecting to login")
+            return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+
         return templates.TemplateResponse("index.html", {"request": request})
 
     return app
