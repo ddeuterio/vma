@@ -9,8 +9,16 @@ VMA (Vulnerability Management Application) helps you track and manage container 
 ### Accessing VMA
 
 1. Navigate to your VMA instance: `https://vma.local:8443`
-2. Log in with your credentials
-3. Accept the self-signed certificate warning (production deployments should use valid certificates)
+2. You'll be automatically redirected to the login page if not authenticated
+3. Log in with your credentials
+4. Accept the self-signed certificate warning (production deployments should use valid certificates)
+
+**Authentication Behavior**:
+- All web pages require authentication
+- Unauthenticated users are automatically redirected to the login page
+- Your session remains active for 15 minutes (access token lifetime)
+- Sessions are automatically renewed via refresh token (2 days)
+- You'll only need to re-login if inactive for 2+ days
 
 ### First Login
 
@@ -18,6 +26,12 @@ After logging in, you'll see the main dashboard with:
 - **Products** panel: Your application products
 - **Navigation menu**: Access to different sections
 - **User menu**: Account settings and logout
+
+**Session Management**:
+- Access token stored in browser memory (secure, not accessible to other sites)
+- Refresh token stored in httpOnly cookie (automatic renewal)
+- Tokens expire automatically for security
+- Logout clears both tokens
 
 ## Core Concepts
 
@@ -97,7 +111,7 @@ vma create --choice product \
 # First, scan your container with Grype
 grype myapp:v2.1.5 -o json > scan-results.json
 
-# Import results into VMA
+# Import results into VMA using API token
 vma import \
   --type grype \
   --file scan-results.json \
@@ -105,8 +119,10 @@ vma import \
   --host vma.local \
   --port 8443 \
   --secure \
-  --token YOUR_ACCESS_TOKEN
+  --token YOUR_API_TOKEN
 ```
+
+**Note**: The `--token` parameter requires an API token (format: `vma_xxxxx`), not a JWT access token. See [Creating API Tokens](#creating-api-tokens) below.
 
 #### Using CI/CD Pipeline
 
@@ -244,6 +260,111 @@ PUT /api/v1/user
 4. Click **"Create"**
 
 **Note**: Users should change their password after first login.
+
+### Creating API Tokens
+
+**API tokens** are long-lived authentication tokens for CLI tools, CI/CD pipelines, and programmatic access.
+
+#### Why Use API Tokens?
+
+- **CLI/Automation**: For `vma import` and other CLI commands
+- **CI/CD Pipelines**: GitHub Actions, GitLab CI, Jenkins, etc.
+- **Scripts**: Automated vulnerability reporting and management
+- **Long-lived**: No need to refresh tokens every 15 minutes
+- **Secure**: Can be revoked independently of user password
+
+#### Creating a Token
+
+**Via Web Interface**:
+1. Navigate to **API Tokens** section (user menu)
+2. Click **"Create Token"**
+3. Fill in:
+   - **Description**: What this token is for (e.g., "GitHub Actions CI")
+   - **Expires**: Optional expiration date (leave empty for permanent)
+4. Click **"Create"**
+5. **IMPORTANT**: Copy the token immediately (shown only once!)
+6. Store securely (password manager, CI/CD secrets, etc.)
+
+**Via API**:
+```bash
+curl -X POST https://vma.local:8443/api/v1/apitoken \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "your@email.com",
+    "description": "CI/CD pipeline token",
+    "expires_days": 365
+  }'
+```
+
+**Response** (save the token!):
+```json
+{
+  "status": true,
+  "result": {
+    "id": 1,
+    "token": "vma_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "prefix": "vma_xxxxxxxx",
+    "description": "CI/CD pipeline token",
+    "expires_at": "2026-01-15T10:00:00Z"
+  }
+}
+```
+
+#### Using API Tokens
+
+API tokens inherit ALL permissions from the user who created them.
+
+**With CLI**:
+```bash
+export VMA_TOKEN="vma_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+vma import \
+  --type grype \
+  --file scan.json \
+  --product my-product \
+  --token $VMA_TOKEN
+```
+
+**With CI/CD**:
+```yaml
+# GitHub Actions
+- name: Import scan results
+  env:
+    VMA_TOKEN: ${{ secrets.VMA_API_TOKEN }}
+  run: |
+    vma import --type grype --file scan.json --token $VMA_TOKEN
+```
+
+**With API calls**:
+```bash
+curl -X POST https://vma.local:8443/api/v1/import \
+  -H "Authorization: Bearer vma_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
+  -H "Content-Type: application/json" \
+  -d @scan-data.json
+```
+
+#### Managing Tokens
+
+**List your tokens**:
+1. Navigate to **API Tokens** section
+2. View all your active tokens (token values are hidden)
+3. See last used time, expiration, and description
+
+**Revoke a token**:
+1. Find the token in your list
+2. Click **"Revoke"**
+3. Confirm revocation
+4. Token immediately stops working
+
+**Best practices**:
+- Create separate tokens for each use case
+- Use descriptive names
+- Set expiration dates for temporary access
+- Revoke unused tokens
+- Rotate tokens periodically
+- Never commit tokens to version control
+- Store in secure locations (CI/CD secrets, password managers)
 
 ## Searching and Filtering
 

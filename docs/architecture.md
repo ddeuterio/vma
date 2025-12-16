@@ -71,6 +71,7 @@ VMA (Vulnerability Management Application) is a full-stack container vulnerabili
 │  │  - teams (organizational units)                      │  │
 │  │  - users (authentication)                            │  │
 │  │  - user_teams (team memberships)                     │  │
+│  │  - api_tokens (programmatic access tokens)          │  │
 │  │  - nvd_sync (sync state tracking)                    │  │
 │  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
@@ -150,28 +151,67 @@ VMA (Vulnerability Management Application) is a full-stack container vulnerabili
 
 ### Authentication & Authorization
 
-**Authentication Flow**:
+#### Web Authentication Flow
 
-1. User submits credentials to `/api/v1/token`
-2. Backend validates against database (Argon2 password hash)
-3. Generate JWT tokens:
-   - Access token (15 minutes, contains user claims)
-   - Refresh token (2 days, httpOnly cookie)
-4. Client includes access token in Authorization header
-5. Token validation on protected endpoints
+**User Login (Web Interface)**:
+
+1. User accesses any web route (e.g., `/`, `/dashboard`, `/products`)
+2. `is_authenticated` dependency checks for valid JWT in Authorization header
+3. **If unauthenticated**: HTTP 302 redirect to `/` (login page)
+4. User submits credentials via POST to `/`
+5. Backend calls `/api/v1/token` internally
+6. Validates credentials against database (Argon2 password hash)
+7. Generate JWT tokens:
+   - **Access token** (15 minutes, in response body and rendered in HTML)
+   - **Refresh token** (2 days, httpOnly cookie, path=/refresh)
+8. Browser stores access token in JavaScript memory
+9. All API requests include: `Authorization: Bearer <access_token>`
+10. On token expiry, frontend automatically calls `/api/v1/refresh_token`
+11. New access token issued without re-login (seamless renewal)
+
+**Web Route Protection**:
+- `/` (GET): Shows login page if unauthenticated, dashboard if authenticated
+- `/{full_path:path}` (spa_fallback): Redirects to `/` if unauthenticated
+- All routes use `Depends(is_authenticated)` for automatic checking
+
+#### API Authentication Methods
+
+**1. JWT Access Tokens** (Web/Interactive):
+- Short-lived (15 minutes)
+- Stored in browser memory
+- Refreshed automatically via refresh token cookie
+- Used with: `Authorization: Bearer <access_token>`
+
+**2. API Tokens** (CLI/CI-CD/Programmatic):
+- Long-lived or permanent (configurable expiration)
+- Created via `/api/v1/apitoken` endpoint
+- Stored securely by user (shown only once)
+- Inherits ALL permissions from creating user
+- Used with: `Authorization: Bearer vma_<token>`
+- Validated via `validate_api_token` dependency
+- Token format: `vma_` + base64-encoded random bytes
 
 **JWT Claims**:
 ```json
 {
-  "username": "user@example.com",
+  "sub": "username:user@example.com",
+  "exp": 1234567890,
+  "type": "access_token",
   "scope": {
     "engineering": "WRITE",
     "security": "READ_ONLY"
   },
-  "root": false,
-  "exp": 1234567890
+  "root": false
 }
 ```
+
+**API Token Workflow**:
+1. User creates token via web UI or API
+2. Token hash stored in database with Argon2
+3. Plaintext token returned once (user must save it)
+4. On API request, token prefix matched and hash verified
+5. User context loaded with all team scopes
+6. Authorization proceeds same as JWT tokens
 
 **Authorization Model**:
 - **Hierarchical permissions**: Team-scoped with three levels
@@ -181,6 +221,7 @@ VMA (Vulnerability Management Application) is a full-stack container vulnerabili
 - **Root users**: Bypass all authorization checks
 - **Resource ownership**: Products belong to teams
 - **Cascading permissions**: Product access grants image access
+- **API tokens**: Inherit creating user's full permission set
 
 ### Data Access Layer
 
@@ -230,6 +271,8 @@ def database_operation(params):
 - `teams`: Organizational units
 - `users`: Authentication and authorization
 - `user_teams`: Team membership with scopes
+- `api_tokens`: Long-lived tokens for programmatic access
+- `nvd_sync`: Sync state tracking
 
 ### NVD Sync Process
 

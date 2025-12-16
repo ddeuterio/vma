@@ -10,16 +10,41 @@ http://localhost:8000/api/v1
 
 ## Authentication
 
-All protected endpoints require JWT authentication via Bearer token in the Authorization header:
+VMA supports two authentication methods:
 
+### 1. JWT Access Tokens (Web/Interactive)
+
+Used for web browser sessions with automatic token refresh.
+
+**Authorization Header**:
 ```
-Authorization: Bearer <access_token>
+Authorization: Bearer <jwt_access_token>
 ```
+
+**Characteristics**:
+- Short-lived (15 minutes)
+- Automatically refreshed via httpOnly cookie
+- Best for web interface and short-lived API calls
+
+### 2. API Tokens (CLI/CI-CD/Programmatic)
+
+Used for long-lived programmatic access (CLI, CI/CD, scripts).
+
+**Authorization Header**:
+```
+Authorization: Bearer vma_<base64_token>
+```
+
+**Characteristics**:
+- Long-lived or permanent
+- Inherits all permissions from creating user
+- Can be revoked independently
+- Best for automation and non-interactive usage
 
 ### Token Endpoints
 
-#### POST /token
-Obtain access and refresh tokens.
+#### POST /api/v1/token
+Obtain JWT access and refresh tokens for web session.
 
 **Request Body** (form-data):
 ```
@@ -31,13 +56,14 @@ password: your_password
 ```json
 {
   "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
-  "token_type": "bearer",
-  "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGc..."
+  "token_type": "Bearer"
 }
 ```
 
-#### POST /refresh
-Refresh an expired access token using a refresh token.
+**Note**: Refresh token is set as httpOnly cookie in response (not visible in JSON).
+
+#### GET /api/v1/refresh_token
+Refresh an expired JWT access token using refresh token cookie.
 
 **Headers**:
 ```
@@ -48,9 +74,29 @@ Cookie: refresh_token=<refresh_token>
 ```json
 {
   "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
-  "token_type": "bearer"
+  "token_type": "Bearer"
 }
 ```
+
+**Note**: New refresh token is also set as httpOnly cookie (token rotation).
+
+#### GET /api/v1/logout
+Logout and invalidate refresh token.
+
+**Headers**:
+```
+Cookie: refresh_token=<refresh_token>
+```
+
+**Response**:
+```json
+{
+  "status": true,
+  "result": "User has logout"
+}
+```
+
+**Note**: Refresh token cookie is cleared (max_age=0).
 
 ## Authorization
 
@@ -217,7 +263,14 @@ Delete an image and all associated vulnerabilities.
 ### POST /import
 Import vulnerability scan results from container scanning tools.
 
+**Authentication**: Requires API Token (not JWT access token)
+
 **Permission**: WRITE or ADMIN on the product's team
+
+**Authorization Header**:
+```
+Authorization: Bearer vma_<your_api_token>
+```
 
 **Request Body**:
 ```json
@@ -226,6 +279,7 @@ Import vulnerability scan results from container scanning tools.
   "product": "my-application",
   "image": "nginx",
   "version": "1.21.0",
+  "team": "engineering",
   "data": [
     {
       "cve": "CVE-2021-1234",
@@ -246,6 +300,12 @@ Import vulnerability scan results from container scanning tools.
   "result": "Vulnerabilities imported successfully"
 }
 ```
+
+**Notes**:
+- This endpoint requires an API token, not a JWT access token
+- API tokens are created via `/api/v1/apitoken`
+- If image doesn't exist, it will be created automatically
+- `last_seen` timestamp is updated for existing vulnerabilities
 
 ### GET /vulnerabilities
 Get vulnerabilities for a specific image.
@@ -458,6 +518,130 @@ Delete a user account.
 
 **Query Parameters**:
 - `email`: User email to delete
+
+## API Token Management
+
+API tokens provide long-lived authentication for CLI tools, CI/CD pipelines, and programmatic access.
+
+### POST /apitoken
+Create a new API token.
+
+**Permission**: Root user can create for any user; regular users can create for themselves
+
+**Authorization**: JWT access token required
+
+**Request Body**:
+```json
+{
+  "username": "user@example.com",
+  "description": "GitHub Actions CI pipeline",
+  "expires_days": 365
+}
+```
+
+**Response**:
+```json
+{
+  "status": true,
+  "result": {
+    "id": 1,
+    "token": "vma_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+    "prefix": "vma_ABCDEFGH",
+    "user_email": "user@example.com",
+    "description": "GitHub Actions CI pipeline",
+    "created_at": "2024-01-15T10:30:00Z",
+    "last_used_at": null,
+    "expires_at": "2025-01-15T10:30:00Z",
+    "revoked": false
+  }
+}
+```
+
+**Important**:
+- The full token is returned ONLY during creation
+- Save it securely - it cannot be retrieved later
+- Set `expires_days: null` for permanent tokens
+- Token inherits ALL permissions from the user
+
+### GET /tokens
+List API tokens.
+
+**Permission**: Root users see all tokens; regular users see only their own
+
+**Authorization**: JWT access token required
+
+**Response**:
+```json
+{
+  "status": true,
+  "result": [
+    {
+      "id": 1,
+      "token": null,
+      "prefix": "vma_ABCDEFGH",
+      "user_email": "user@example.com",
+      "description": "GitHub Actions CI pipeline",
+      "created_at": "2024-01-15T10:30:00Z",
+      "last_used_at": "2024-01-20T14:25:00Z",
+      "expires_at": "2025-01-15T10:30:00Z",
+      "revoked": false
+    }
+  ]
+}
+```
+
+**Note**: Token values are never returned in list operations (only prefix shown).
+
+### GET /tokens/{token_id}
+Get details of a specific API token.
+
+**Permission**: Root users can view any token; users can view their own tokens
+
+**Authorization**: JWT access token required
+
+**Path Parameters**:
+- `token_id`: Token ID (integer)
+
+**Response**:
+```json
+{
+  "status": true,
+  "result": {
+    "id": 1,
+    "token": null,
+    "prefix": "vma_ABCDEFGH",
+    "user_email": "user@example.com",
+    "description": "GitHub Actions CI pipeline",
+    "created_at": "2024-01-15T10:30:00Z",
+    "last_used_at": "2024-01-20T14:25:00Z",
+    "expires_at": "2025-01-15T10:30:00Z",
+    "revoked": false
+  }
+}
+```
+
+### DELETE /tokens/{token_id}
+Revoke an API token.
+
+**Permission**: Root users can revoke any token; users can revoke their own tokens
+
+**Authorization**: JWT access token required
+
+**Path Parameters**:
+- `token_id`: Token ID (integer)
+
+**Response**:
+```json
+{
+  "status": "success",
+  "message": "Token revoked successfully"
+}
+```
+
+**Notes**:
+- Revoked tokens immediately stop working
+- Revocation is permanent (cannot be undone)
+- Token record remains in database for audit purposes
 
 ## Error Responses
 
