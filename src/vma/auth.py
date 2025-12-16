@@ -16,8 +16,23 @@ from vma import connector as c
 from vma import helper as h
 
 load_dotenv()
+
+MIN_LEN_SECRET_KEY = 32
+
 _secret_key_access = os.getenv("SECRET_KEY_ACCESS")
+
+if not _secret_key_access or len(_secret_key_access) < MIN_LEN_SECRET_KEY:
+    raise ValueError(
+        f"SECRET_KEY_ACCESS must be at least {MIN_LEN_SECRET_KEY} characters"
+    )
+
 _secret_key_refresh = os.getenv("SECRET_KEY_REFRESH")
+
+if not _secret_key_refresh or len(_secret_key_refresh) < MIN_LEN_SECRET_KEY:
+    raise ValueError(
+        f"SECRET_KEY_REFRESH must be at least {MIN_LEN_SECRET_KEY} characters"
+    )
+
 _algorithm = os.getenv("TOKEN_ALG") or "HS256"
 _expire_access_token = int(os.getenv("ACCESS_TOKEN_EXP_TIME") or "15")
 _expire_refresh_token = int(os.getenv("REFRESH_TOKEN_EXP_TIME") or "2")

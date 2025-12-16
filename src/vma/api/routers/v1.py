@@ -564,8 +564,7 @@ async def patch_user(
     )
     scopes = helper.validate_scopes(user.scopes) if user.scopes else None
 
-    is_root = user.root
-    logger.debug(f"is_root value detected: {is_root}")
+    is_root = user.root if (user_data.root and user.root) else False
 
     if not email:
         raise HTTPException(status_code=400, detail=helper.errors["400"])
@@ -785,7 +784,7 @@ async def create_api_token(
 
     Returns the token ONLY ONCE - save it securely!
     """
-    if not user_data.root or (request.username != user_data.username):
+    if not user_data.root and (request.username != user_data.username):
         raise HTTPException(status_code=401, detail="Unauthorized operation")
 
     res = None
