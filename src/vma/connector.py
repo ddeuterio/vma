@@ -170,6 +170,22 @@ queries = {
             name,
             version;
     """,
+    "get_images_by_product": """
+        SELECT
+            name,
+            version,
+            product,
+            team
+        FROM
+            images
+        WHERE
+            product = %s AND
+            team = ANY(%s)
+        ORDER BY
+            product,
+            name,
+            version;
+    """,
     "get_images_by_name_product": """
         SELECT
             name,
@@ -1448,7 +1464,7 @@ def delete_team(id) -> dict:
             host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
         ) as conn:
             with conn.cursor() as cur:
-                cur.execute(queries["delete_team_by_id"], (id,))
+                cur.execute(queries["delete_teams"], (id,))
                 if not cur.rowcount:
                     logger.error(f"Team with id {id} could not be removed")
                     res["status"] = False
@@ -1772,6 +1788,7 @@ def update_token_last_used(token_id: int) -> dict:
         ) as conn:
             with conn.cursor() as cur:
                 cur.execute(queries["update_token_last_used"], (token_id,))
+                conn.commit()
 
         res["status"] = True
         res["result"] = "Token updated successfully"
