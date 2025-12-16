@@ -55,7 +55,7 @@ def create_web_app():
         ret = None
         try:
             if user_data:
-                _render_page(
+                return _render_page(
                     request=request, template_name="index.html", context={}, tokens={}
                 )
 
@@ -72,10 +72,9 @@ def create_web_app():
 
             token_endp = request.app.url_path_for("token")
             payload = {"username": form["username"], "password": form["password"]}
+
             async with AsyncClient(base_url=str(request.base_url)) as client:
                 res = await client.post(token_endp, data=payload)
-
-            logger.debug(f"response from api /token: {res.json()}")
 
             if res.status_code != status.HTTP_200_OK:
                 context = {"error": "Invalid credentials"}
@@ -93,8 +92,6 @@ def create_web_app():
 
             if res.cookies.get("refresh_token"):
                 # TODO: centralize cookie settings
-                logger.debug("refresh_token cookie found and being set in response")
-                logger.debug(f"refresh cookie: {res.cookies.get('refresh_token')}")
                 ret.set_cookie(
                     key="refresh_token",
                     value=res.cookies.get("refresh_token"),
@@ -105,7 +102,13 @@ def create_web_app():
                     path="/refresh",
                 )
         except Exception as e:
-            logger.error(f"error processing post request: {e}")
+            logger.error(f"Error processing post request: {e}")
+            ret = _render_page(
+                request=request,
+                template_name="login.html",
+                context={"error": "User could not be validated"},
+                tokens={},
+            )
         return ret
 
     @app.get("/")
@@ -113,7 +116,7 @@ def create_web_app():
         request: Request, user_data: mod_v1.JwtData | None = Depends(a.is_authenticated)
     ) -> Any:
         if user_data is None:
-            logger.debug("user is not authenticated, render login page")
+            logger.debug("User is not authenticated, render login page")
             return _render_page(
                 request=request, template_name="login.html", context={}, tokens={}
             )
