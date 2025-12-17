@@ -2,6 +2,6 @@ name: vma
 python_version: "3.10"
 ci:
   run_lint: false
-  run_tests: false
+  run_tests: true
   run_security: false
   run_publish: true
