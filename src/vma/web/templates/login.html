@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VMA | Sign in</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ request.url_for('static', path='css/auth.css') }}">
+</head>
+<body>
+    <main class="login-page" role="main">
+        <header class="login-page__brand">
+            <span class="login-page__logo" aria-hidden="true">V</span>
+            <div>
+                <p class="login-page__title">Vulnerability Manager</p>
+                <p class="login-page__subtitle">Sign in to continue to your workspace.</p>
+            </div>
+        </header>
+        <form id="loginForm" class="login-form" method="post" action="/" novalidate>
+            <div class="login-field">
+                <label for="loginEmail">Email</label>
+                <input
+                    id="loginEmail"
+                    name="username"
+                    type="email"
+                    autocomplete="username"
+                    placeholder="you@example.com"
+                    required
+                >
+            </div>
+            <div class="login-field">
+                <label for="loginPassword">Password</label>
+                <input
+                    id="loginPassword"
+                    name="password"
+                    type="password"
+                    autocomplete="current-password"
+                    placeholder="Enter your password"
+                    required
+                >
+            </div>
+            <div class="login-actions">
+                <button type="submit" class="login-submit" data-login-submit>
+                    <span class="login-submit__label">Sign in</span>
+                </button>
+                <p class="login-hint">
+                    Access is scoped to your assigned teams and projects.
+                </p>
+                <p
+                    class="login-error"
+                    id="loginError"
+                    role="alert"
+                    data-server-error="{{ error or '' }}"
+                    {% if not error %}hidden{% endif %}
+                >
+                    {{ error or '' }}
+                </p>
+            </div>
+        </form>
+        <noscript>
+            <p class="login-error" role="alert">
+                JavaScript is required to authenticate. Please enable it and reload the page.
+            </p>
+        </noscript>
+    </main>
+
+    <script defer src="{{ request.url_for('static', path='js/login.js') }}"></script>
+</body>
+</html>

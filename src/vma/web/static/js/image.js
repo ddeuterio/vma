@@ -1,6 +1,7 @@
 (function () {
     const utils = window.vmaUtils || {};
     const router = window.vmaRouter || {};
+    const auth = window.vmaAuth || {};
 
     const {
         createElementWithAttrs,
@@ -35,14 +36,15 @@
 
     function parseImageRecord(image) {
         if (!image) {
-            return { name: '', version: '', product: '' };
+            return { name: '', version: '', product: '', team: '' };
         }
 
         if (Array.isArray(image)) {
             return {
                 name: image[0] ?? '',
                 version: image[1] ?? '',
-                product: image[2] ?? ''
+                product: image[2] ?? '',
+                team: image[3] ?? ''
             };
         }
 
@@ -50,11 +52,12 @@
             return {
                 name: image.name ?? '',
                 version: image.version ?? '',
-                product: image.product ?? ''
+                product: image.product ?? '',
+                team: image.team ?? image.team_id ?? ''
             };
         }
 
-        return { name: '', version: '', product: '' };
+        return { name: '', version: '', product: '', team: '' };
     }
 
     function getImageNamesByProduct(images, productId) {
@@ -83,6 +86,24 @@
         return unique;
     }
 
+    function findProductRecord(products, productId) {
+        if (!Array.isArray(products) || !productId) {
+            return null;
+        }
+        return (
+            products.find(product => (product.id ?? product.name ?? product[0]) === productId) ||
+            null
+        );
+    }
+
+    function getTeamForProduct(products, productId) {
+        const record = findProductRecord(products, productId);
+        if (!record) {
+            return '';
+        }
+        return record.team ?? record.team_id ?? record.teamName ?? record[2] ?? '';
+    }
+
     function resetSelectOptions(select, placeholder) {
         if (!select) {
             return;
@@ -93,6 +114,100 @@
             select.appendChild(option);
         }
         select.value = '';
+    }
+
+    function getUniqueTeamsFromProducts(products) {
+        if (!Array.isArray(products)) {
+            return [];
+        }
+        const names = products
+            .map(product => product.team ?? product.team_id ?? product[2])
+            .filter(Boolean);
+        const unique = Array.from(new Set(names));
+        unique.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+        return unique;
+    }
+
+    function getTeamsForImageForm(state) {
+        const scopeTeams = auth.getWritableTeams?.() || [];
+        const teamsFromScope = scopeTeams.map(team => team.name).filter(Boolean);
+        const productTeams = getUniqueTeamsFromProducts(state?.data?.products || []);
+
+        if (auth.isRoot?.()) {
+            return productTeams.length ? productTeams : teamsFromScope;
+        }
+
+        if (teamsFromScope.length) {
+            return teamsFromScope;
+        }
+
+        return productTeams;
+    }
+
+    function populateImageTeamOptions(state) {
+        if (!state?.teamSelect) {
+            return;
+        }
+        const select = state.teamSelect;
+        const teams = getTeamsForImageForm(state);
+        const previous = select.value;
+        select.innerHTML = '';
+
+        if (!teams.length) {
+            select.innerHTML = '<option value="">No teams available</option>';
+            select.disabled = true;
+            updateImageProductOptions(state);
+            return;
+        }
+
+        const placeholder = createElementWithAttrs('option', 'Select a team…', { value: '' });
+        placeholder.disabled = true;
+        placeholder.selected = true;
+        select.appendChild(placeholder);
+
+        teams.forEach(name => {
+            const option = createElementWithAttrs('option', name, { value: name });
+            select.appendChild(option);
+        });
+
+        if (teams.includes(previous)) {
+            select.value = previous;
+            placeholder.selected = false;
+        } else {
+            select.value = '';
+        }
+
+        select.disabled = false;
+        updateImageProductOptions(state);
+    }
+
+    function updateImageProductOptions(state) {
+        if (!state?.productSelect) {
+            return;
+        }
+        const select = state.productSelect;
+        const team = state.teamSelect?.value || '';
+        const placeholder = team ? 'Select a product…' : 'Select a team first…';
+        resetSelectOptions(select, placeholder);
+        select.disabled = true;
+
+        if (!team) {
+            return;
+        }
+
+        const products = Array.isArray(state?.data?.products) ? state.data.products : [];
+        const filtered = products.filter(
+            product => (product.team ?? product.team_id ?? product[2]) === team
+        );
+        filtered.forEach(product => {
+            const value = product.id ?? product.name ?? product[0];
+            if (!value) {
+                return;
+            }
+            select.appendChild(createElementWithAttrs('option', value, { value }));
+        });
+
+        select.disabled = !filtered.length;
     }
 
     const COMPARISON_LABELS = {
@@ -624,6 +739,7 @@
             const name = image.name ?? image[0] ?? '—';
             const version = image.version ?? image[1] ?? '—';
             const productId = image.product ?? image[2] ?? '—';
+            const teamId = image.team ?? image.team_id ?? image[3] ?? '';
 
             const row = document.createElement('tr');
             row.appendChild(createElementWithAttrs('td', name));
@@ -636,7 +752,8 @@
                 'data-image-action': 'details',
                 'data-image-name': name,
                 'data-image-version': version,
-                'data-image-product': productId
+                'data-image-product': productId,
+                'data-image-team': teamId
             });
             actionCell.appendChild(detailsButton);
             row.appendChild(actionCell);
@@ -701,9 +818,15 @@
                     <input type="text" id="image-version" name="version" placeholder="1.0.0" required>
                 </div>
                 <div class="form-group">
+                    <label for="image-team">Team</label>
+                    <select id="image-team" name="team" required disabled>
+                        <option value="">Loading teams…</option>
+                    </select>
+                </div>
+                <div class="form-group">
                     <label for="image-product">Product</label>
-                    <select id="image-product" name="product" required>
-                        <option value="">Select a product first…</option>
+                    <select id="image-product" name="product" required disabled>
+                        <option value="">Select a team first…</option>
                     </select>
                 </div>
                 <div class="form-actions">
@@ -925,6 +1048,7 @@
             listCard,
             detailCard,
             form: formCard.querySelector('[data-image-form]'),
+            teamSelect: formCard.querySelector('#image-team'),
             formFeedback: formCard.querySelector('[data-image-form-feedback]'),
             productSelect: formCard.querySelector('#image-product'),
             listFeedback: listCard.querySelector('[data-image-list-feedback]'),
@@ -998,22 +1122,37 @@
 
             state.data.images = normaliseCollection(imagesPayload).map(parseImageRecord);
             state.data.products = normaliseCollection(productsPayload);
-            updateSelectOptions(state.productSelect, state.data.products, 'Select a product…');
-            updateSelectOptions(state.filterSelect, state.data.products, 'All products');
-            updateSelectOptions(state.compareProductSelect, state.data.products, 'Select a product…');
-            updateSelectOptions(state.deleteProductSelect, state.data.products, 'Select a product…');
-            state.compareSelections.product = state.compareProductSelect?.value || state.compareSelections.product || '';
-            state.deleteSelections.product = state.deleteProductSelect?.value || state.deleteSelections.product || '';
+        } catch (error) {
+            state.rowsBody.innerHTML = '';
+            const row = document.createElement('tr');
+            row.appendChild(
+                createElementWithAttrs('td', 'Unable to load images.', { colspan: '4', class: 'empty' })
+            );
+            state.rowsBody.appendChild(row);
+            state.counter.textContent = '0';
+            helpers.list?.showMessage(error.message || 'Failed to fetch images.', 'error');
+        }
 
-            const hasProducts = Boolean(state.data.products.length);
-            const formElements = state.form ? Array.from(state.form.elements) : [];
-            formElements.forEach(element => {
-                if (element.tagName === 'BUTTON') {
-                    element.disabled = !hasProducts && element.type !== 'reset';
-                } else if (element.tagName === 'SELECT' || element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
-                    element.disabled = !hasProducts;
-                }
-            });
+        state.data.images = Array.isArray(state.data.images) ? state.data.images : [];
+        state.data.products = Array.isArray(state.data.products) ? state.data.products : [];
+
+        populateImageTeamOptions(state);
+        updateImageProductOptions(state);
+        updateSelectOptions(state.filterSelect, state.data.products, 'All products');
+        updateSelectOptions(state.compareProductSelect, state.data.products, 'Select a product…');
+        updateSelectOptions(state.deleteProductSelect, state.data.products, 'Select a product…');
+        state.compareSelections.product = state.compareProductSelect?.value || state.compareSelections.product || '';
+        state.deleteSelections.product = state.deleteProductSelect?.value || state.deleteSelections.product || '';
+
+        const hasProducts = Boolean(state.data.products.length);
+        const formElements = state.form ? Array.from(state.form.elements) : [];
+        formElements.forEach(element => {
+            if (element.tagName === 'BUTTON') {
+                element.disabled = !hasProducts && element.type !== 'reset';
+            } else if (element.tagName === 'SELECT' || element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
+                element.disabled = !hasProducts;
+            }
+        });
 
             const compareElements = state.compareForm ? Array.from(state.compareForm.elements) : [];
             compareElements.forEach(element => {
@@ -1037,39 +1176,29 @@
                 state.toggleDeleteButton.disabled = !hasProducts;
             }
 
-            if (!hasProducts) {
-                helpers.form.showMessage('Create a product before registering images.', 'info');
-                helpers.compare?.showMessage('Create a product before comparing images.', 'info');
-                helpers.delete?.showMessage('Create a product before deleting images.', 'info');
-                resetCompareSelections(state);
+        if (!hasProducts) {
+            helpers.form.showMessage('Create a product before registering images.', 'info');
+            helpers.compare?.showMessage('Create a product before comparing images.', 'info');
+            helpers.delete?.showMessage('Create a product before deleting images.', 'info');
+            resetCompareSelections(state);
+            resetComparisonResults(state);
+            resetDeleteSelections(state);
+        } else {
+            helpers.form.hideMessage();
+            helpers.compare?.hideMessage();
+            helpers.delete?.hideMessage();
+            syncCompareSelectors(state);
+            syncDeleteSelectors(state);
+            if (!state.compareCard?.classList.contains('show')) {
                 resetComparisonResults(state);
-                resetDeleteSelections(state);
-            } else {
-                helpers.form.hideMessage();
-                helpers.compare?.hideMessage();
-                helpers.delete?.hideMessage();
-                syncCompareSelectors(state);
-                syncDeleteSelectors(state);
-                if (!state.compareCard?.classList.contains('show')) {
-                    resetComparisonResults(state);
-                }
             }
-
-            const filterValue = state.filterSelect?.value || '';
-            const filtered = filterValue
-                ? state.data.images.filter(image => (image.product ?? image[2]) === filterValue)
-                : state.data.images;
-            renderImageRows(state, filtered, filterValue);
-        } catch (error) {
-            state.rowsBody.innerHTML = '';
-            const row = document.createElement('tr');
-            row.appendChild(
-                createElementWithAttrs('td', 'Unable to load images.', { colspan: '4', class: 'empty' })
-            );
-            state.rowsBody.appendChild(row);
-            state.counter.textContent = '0';
-            helpers.list?.showMessage(error.message || 'Failed to fetch images.', 'error');
         }
+
+        const filterValue = state.filterSelect?.value || '';
+        const filtered = filterValue
+            ? state.data.images.filter(image => (image.product ?? image[2]) === filterValue)
+            : state.data.images;
+        renderImageRows(state, filtered, filterValue);
     }
 
     function handleForm(state, helpers) {
@@ -1085,10 +1214,11 @@
             const payload = {
                 name: formData.get('name')?.trim(),
                 version: formData.get('version')?.trim(),
-                product: formData.get('product')?.trim()
+                product: formData.get('product')?.trim(),
+                team: formData.get('team')?.trim()
             };
 
-            if (!payload.name || !payload.version || !payload.product) {
+            if (!payload.name || !payload.version || !payload.product || !payload.team) {
                 helpers.form.showMessage('All fields are required to register an image.', 'error');
                 return;
             }
@@ -1113,6 +1243,20 @@
 
         state.form.addEventListener('reset', () => {
             helpers.form.hideMessage();
+            if (state.teamSelect) {
+                state.teamSelect.value = '';
+            }
+            updateImageProductOptions(state);
+        });
+    }
+
+    function handleImageFormTeamSelection(state, helpers) {
+        if (!state.teamSelect) {
+            return;
+        }
+        state.teamSelect.addEventListener('change', () => {
+            updateImageProductOptions(state);
+            helpers.form?.hideMessage();
         });
     }
 
@@ -1253,6 +1397,12 @@
                 return;
             }
 
+            const team = getTeamForProduct(state.data?.products || [], product);
+            if (!team) {
+                helpers.delete?.showMessage('Unable to determine the team for this product.', 'error');
+                return;
+            }
+
             const confirmation = version
                 ? `Delete version "${version}" of "${image}" for product "${product}"?`
                 : `Delete all versions of "${image}" for product "${product}"?`;
@@ -1266,7 +1416,7 @@
                 params.append('ver', version);
             }
 
-            const endpoint = `/image/${encodeURIComponent(product)}?${params.toString()}`;
+            const endpoint = `/image/${encodeURIComponent(team)}/${encodeURIComponent(product)}?${params.toString()}`;
 
             try {
                 await fetchJSON(apiUrl(endpoint), { method: 'DELETE' });
@@ -1316,6 +1466,12 @@
                 return;
             }
 
+            const team = getTeamForProduct(state.data?.products || [], product);
+            if (!team) {
+                helpers.compare?.showMessage('Unable to determine the team for this product.', 'error');
+                return;
+            }
+
             resetComparisonResults(state, 'Loading comparison…', { keepVisible: true });
             state.compareSelections.product = product;
             state.compareSelections.image = image;
@@ -1331,7 +1487,7 @@
             }
 
             try {
-                const endpoint = `/image/compare/${encodeURIComponent(product)}/${encodeURIComponent(image)}/${encodeURIComponent(baseVersion)}/${encodeURIComponent(targetVersion)}`;
+                const endpoint = `/image/compare/${encodeURIComponent(team)}/${encodeURIComponent(product)}/${encodeURIComponent(image)}/${encodeURIComponent(baseVersion)}/${encodeURIComponent(targetVersion)}`;
                 const payload = await fetchJSON(apiUrl(endpoint));
                 const result = payload?.result || {};
                 const comparison = Array.isArray(result.comparison) ? result.comparison : [];
@@ -1430,7 +1586,9 @@
             detailTitle.textContent = `${imageMeta.name} · ${imageMeta.version}`;
         }
         if (detailMeta) {
-            detailMeta.textContent = `Product: ${imageMeta.product}`;
+            const teamValue = imageMeta.team || getTeamForProduct(state.data?.products || [], imageMeta.product);
+            const teamLabel = teamValue ? ` · Team: ${teamValue}` : '';
+            detailMeta.textContent = `Product: ${imageMeta.product}${teamLabel}`;
         }
         setPageTitle?.(`Images · ${imageMeta.name} ${imageMeta.version}`);
     }
@@ -1482,8 +1640,21 @@
             detailSearchInput.value = '';
         }
 
+        const team = imageMeta.team || getTeamForProduct(state.data?.products || [], imageMeta.product);
+        if (!team) {
+            state.currentVulns = [];
+            renderVulnerabilityRows(state, []);
+            if (detailFeedback) {
+                detailFeedback.textContent = 'Unable to determine the team for this image.';
+                detailFeedback.className = 'inline-message inline-message--error';
+                detailFeedback.hidden = false;
+            }
+            return;
+        }
+        imageMeta.team = team;
+
         try {
-            const endpoint = `/image/${encodeURIComponent(imageMeta.product)}/${encodeURIComponent(imageMeta.name)}/${encodeURIComponent(imageMeta.version)}/vuln`;
+            const endpoint = `/image/${encodeURIComponent(team)}/${encodeURIComponent(imageMeta.product)}/${encodeURIComponent(imageMeta.name)}/${encodeURIComponent(imageMeta.version)}/vuln`;
             const payload = await fetchJSON(apiUrl(endpoint));
             const items = payload && Array.isArray(payload.result) ? payload.result : [];
             state.currentVulns = items;
@@ -1553,11 +1724,15 @@
             const name = trigger.getAttribute('data-image-name');
             const version = trigger.getAttribute('data-image-version');
             const product = trigger.getAttribute('data-image-product');
+            let team = trigger.getAttribute('data-image-team') || '';
+            if (!team) {
+                team = getTeamForProduct(state.data?.products || [], product);
+            }
             if (!name || !version || !product) {
                 return;
             }
 
-            showImageDetails(state, { name, version, product });
+            showImageDetails(state, { name, version, product, team });
         });
     }
 
@@ -1584,6 +1759,10 @@
                 firstField?.focus();
             } else {
                 form?.reset();
+                if (state.teamSelect) {
+                    state.teamSelect.value = '';
+                }
+                updateImageProductOptions(state);
             }
         };
 
@@ -1744,8 +1923,11 @@
         resetCompareSelections(state);
         resetComparisonResults(state);
         resetDeleteSelections(state);
+        populateImageTeamOptions(state);
+        updateImageProductOptions(state);
         loadData(state, helpers);
         handleForm(state, helpers);
+        handleImageFormTeamSelection(state, helpers);
         handleDeleteForm(state, helpers);
         handleCompareForm(state, helpers);
         handleDeleteInteractions(state, helpers);

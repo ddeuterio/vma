@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="{{ request.url_for('static', path='css/styles.css') }}">
 </head>
-<body>
+<body data-access-token="{{ access_token | default('', true) }}">
     <nav class="sidebar" id="sidebar">
         <div class="sidebar-header">
             <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Toggle navigation">
@@ -40,6 +40,18 @@
                     <span>CVE Search</span>
                 </a>
             </li>
+            <li class="nav-item" data-admin-only hidden>
+                <button class="nav-link nav-link--button" type="button" data-route="teams">
+                    <i class="fas fa-users-gear"></i>
+                    <span>Teams</span>
+                </button>
+            </li>
+            <li class="nav-item" data-admin-only hidden>
+                <button class="nav-link nav-link--button" type="button" data-route="users">
+                    <i class="fas fa-user-shield"></i>
+                    <span>Users</span>
+                </button>
+            </li>
         </ul>
     </nav>
 
@@ -57,6 +69,15 @@
                     <i class="fas fa-moon theme-toggle__icon" aria-hidden="true"></i>
                     <span class="theme-toggle__label">Dark mode</span>
                 </button>
+                <button
+                    type="button"
+                    class="logout-button"
+                    data-logout
+                    aria-label="Sign out"
+                >
+                    <i class="fas fa-right-from-bracket logout-button__icon" aria-hidden="true"></i>
+                    <span class="logout-button__label">Logout</span>
+                </button>
             </div>
         </header>
         <div class="content-body">
@@ -73,5 +94,7 @@
     <script defer src="{{ request.url_for('static', path='js/image.js') }}"></script>
     <script defer src="{{ request.url_for('static', path='js/product.js') }}"></script>
     <script defer src="{{ request.url_for('static', path='js/cve.js') }}"></script>
+    <script defer src="{{ request.url_for('static', path='js/teams.js') }}"></script>
+    <script defer src="{{ request.url_for('static', path='js/users.js') }}"></script>
 </body>
 </html>

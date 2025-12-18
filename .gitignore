@@ -53,5 +53,4 @@ MANIFEST
 .conda*/
 .python-version
 .env
-tests/*
 dev-docker/*

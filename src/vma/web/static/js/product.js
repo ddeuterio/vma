@@ -1,6 +1,7 @@
 (function () {
     const utils = window.vmaUtils || {};
     const router = window.vmaRouter || {};
+    const auth = window.vmaAuth || {};
 
     const {
         createElementWithAttrs,
@@ -31,6 +32,28 @@
         }
 
         return [];
+    }
+
+    function normaliseTeams(payload) {
+        if (!payload || typeof payload !== 'object') {
+            return [];
+        }
+
+        const data = Array.isArray(payload.result) ? payload.result : payload;
+        if (Array.isArray(data)) {
+            return data;
+        }
+
+        return [];
+    }
+
+    function findProductRecord(products, id) {
+        if (!Array.isArray(products) || !id) {
+            return null;
+        }
+        return (
+            products.find(product => (product.id ?? product.name ?? product[0]) === id) || null
+        );
     }
 
     function renderProductsView() {
@@ -72,6 +95,12 @@
                 <div class="form-group">
                     <label for="product-id">Product ID</label>
                     <input type="text" id="product-id" name="id" placeholder="example-product" required>
+                </div>
+                <div class="form-group">
+                    <label for="product-team">Team</label>
+                    <select id="product-team" name="team" required disabled>
+                        <option value="">Loading teams…</option>
+                    </select>
                 </div>
                 <div class="form-group">
                     <label for="product-description">Description</label>
@@ -121,10 +150,11 @@
                     <tr>
                         <th>ID</th>
                         <th>Description</th>
+                        <th>Team</th>
                     </tr>
                 </thead>
                 <tbody data-product-rows>
-                    <tr><td colspan="2" class="empty">Loading…</td></tr>
+                    <tr><td colspan="3" class="empty">Loading…</td></tr>
                 </tbody>
             </table>
         `;
@@ -148,7 +178,8 @@
             counter: listCard.querySelector('[data-product-count]'),
             deleteForm: deleteCard.querySelector('[data-product-delete-form]'),
             deleteFeedback: deleteCard.querySelector('[data-product-delete-feedback]'),
-            deleteSelect: deleteCard.querySelector('#product-delete-id')
+            deleteSelect: deleteCard.querySelector('#product-delete-id'),
+            teamSelect: formCard.querySelector('#product-team')
         };
     }
 
@@ -158,7 +189,7 @@
         }
 
         if (!Array.isArray(items) || !items.length) {
-            rowsBody.innerHTML = '<tr><td colspan="2" class="empty">No products yet.</td></tr>';
+            rowsBody.innerHTML = '<tr><td colspan="3" class="empty">No products yet.</td></tr>';
             counter.textContent = '0';
             return;
         }
@@ -167,13 +198,106 @@
         items.forEach(item => {
             const id = item.id ?? item.name ?? item[0];
             const description = item.description ?? item[1] ?? '—';
+            const team = item.team ?? item.team_id ?? item[2] ?? '—';
 
             const row = document.createElement('tr');
             row.appendChild(createElementWithAttrs('td', id || '—'));
             row.appendChild(createElementWithAttrs('td', description || '—'));
+            row.appendChild(createElementWithAttrs('td', team || '—'));
             rowsBody.appendChild(row);
         });
         counter.textContent = items.length;
+    }
+
+    function populateTeamOptions(state, teams) {
+        if (!state.teamSelect) {
+            return;
+        }
+
+        const select = state.teamSelect;
+        const options = Array.isArray(teams) ? teams : [];
+        const previous = select.value;
+
+        select.innerHTML = '';
+
+        if (!options.length) {
+            select.innerHTML = '<option value="">No teams available</option>';
+            select.disabled = true;
+            return;
+        }
+
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Select a team…';
+        placeholder.disabled = true;
+        placeholder.selected = true;
+        select.appendChild(placeholder);
+
+        options.forEach(team => {
+            const value = team.name ?? team.id ?? team.value ?? team[0];
+            const label =
+                team.label
+                ?? team.name
+                ?? (team.description ? `${value}` : value);
+            if (!value) {
+                return;
+            }
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            select.appendChild(option);
+        });
+
+        if (options.some(team => (team.name ?? team.id ?? team[0]) === previous)) {
+            select.value = previous;
+        }
+
+        select.disabled = false;
+    }
+
+    async function loadTeams(state, helpers = {}) {
+        if (!state.teamSelect) {
+            return;
+        }
+        state.teamSelect.disabled = true;
+        state.teamSelect.innerHTML = '<option value="">Loading teams…</option>';
+
+        const isRoot = auth.isRoot?.() ?? false;
+
+        if (isRoot) {
+            try {
+                const response = await fetchJSON(apiUrl('/teams'));
+                const teams = normaliseTeams(response);
+                state.teamsData = teams;
+                populateTeamOptions(state, teams);
+                if (!teams.length) {
+                    helpers.form?.showMessage('Create a team before adding products.', 'info');
+                } else {
+                    helpers.form?.hideMessage();
+                }
+            } catch (error) {
+                state.teamSelect.innerHTML = '<option value="">Unable to load teams</option>';
+                state.teamSelect.disabled = true;
+                helpers.form?.showMessage(error.message || 'Unable to load teams.', 'error');
+            }
+            return;
+        }
+
+        const scopeTeams = auth.getWritableTeams?.() || [];
+        if (!scopeTeams.length) {
+            state.teamSelect.innerHTML = '<option value="">No writable teams available</option>';
+            helpers.form?.showMessage('Your account does not have write access to any team.', 'error');
+            return;
+        }
+
+        const mapped = scopeTeams.map(team => ({
+            name: team.name,
+            label: team.name,
+            description: team.permission
+        }));
+        state.teamsData = mapped;
+        populateTeamOptions(state, mapped);
+        helpers.form?.hideMessage();
     }
 
     async function loadProducts(state, helpers = {}) {
@@ -181,7 +305,7 @@
             return;
         }
 
-        state.rowsBody.innerHTML = '<tr><td colspan="2" class="empty">Loading…</td></tr>';
+        state.rowsBody.innerHTML = '<tr><td colspan="3" class="empty">Loading…</td></tr>';
         helpers.form?.hideMessage();
         helpers.list?.hideMessage();
         helpers.delete?.hideMessage();
@@ -210,11 +334,16 @@
             const formData = new FormData(state.form);
             const payload = {
                 name: formData.get('id')?.trim(),
-                description: formData.get('description')?.trim() || null
+                description: formData.get('description')?.trim() || null,
+                team: formData.get('team')?.trim()
             };
 
             if (!payload.name) {
                 helpers.form?.showMessage('Product ID is required.', 'error');
+                return;
+            }
+            if (!payload.team) {
+                helpers.form?.showMessage('A team must be selected.', 'error');
                 return;
             }
 
@@ -259,11 +388,17 @@
         const previous = select.value;
 
         select.innerHTML = '<option value="">Select a product…</option>';
+        let allowedCount = 0;
         products.forEach(product => {
             const value = product.id ?? product.name ?? product[0];
-            if (!value) {
+            const team = product.team ?? product.team_id ?? product[2];
+            if (!value || !team) {
                 return;
             }
+            if (!auth.hasTeamPermission?.(team, ['admin'])) {
+                return;
+            }
+            allowedCount += 1;
             select.appendChild(createElementWithAttrs('option', value, { value }));
         });
 
@@ -273,7 +408,7 @@
             select.value = '';
         }
 
-        select.disabled = !products.length;
+        select.disabled = !allowedCount;
     }
 
     function handleDeleteForm(state, helpers) {
@@ -291,13 +426,21 @@
                 return;
             }
 
+            const productRecord = findProductRecord(state.productsData, productId);
+            const team = productRecord?.team ?? productRecord?.team_id ?? null;
+            if (!team) {
+                helpers.delete?.showMessage('Unable to determine the team for this product.', 'error');
+                return;
+            }
+
             const confirmed = window.confirm(`Delete product "${productId}"? This action cannot be undone.`);
             if (!confirmed) {
                 return;
             }
 
             try {
-                await fetchJSON(apiUrl(`/product/${encodeURIComponent(productId)}`), {
+                const endpoint = `/product/${encodeURIComponent(team)}/${encodeURIComponent(productId)}`;
+                await fetchJSON(apiUrl(endpoint), {
                     method: 'DELETE'
                 });
                 await loadProducts(state, helpers);
@@ -417,6 +560,7 @@
             delete: createMessageHelpers(state.deleteFeedback)
         };
 
+        loadTeams(state, helpers);
         loadProducts(state, helpers);
         handleSubmit(state, helpers);
         setupFormToggle(state, helpers);
