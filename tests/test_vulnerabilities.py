@@ -249,7 +249,7 @@ class TestImageVulnerabilities:
 
     @pytest.mark.asyncio
     async def test_get_image_vulnerabilities_missing_params(self, client, read_only_user_token):
-        """Test that missing parameters fail validation"""
+        """Test that missing parameters fail with 404 (FastAPI routing)"""
         async def override_validate_token():
             return read_only_user_token
 
@@ -264,7 +264,8 @@ class TestImageVulnerabilities:
                 headers={"Authorization": "Bearer fake_token"}
             )
 
-            assert response.status_code == status.HTTP_400_BAD_REQUEST
+            # FastAPI returns 404 when path parameters are missing
+            assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 class TestImageComparison:
@@ -403,10 +404,9 @@ class TestVulnerabilityImport:
         """Test importing vulnerabilities using API token"""
         mock_token = "vma_test123456789012345678901234567890"
 
-        with patch("vma.api.routers.v1.a.validate_api_token") as mock_validate:
-            mock_c = mock_router_dependencies["connector"]
-
-            mock_validate.return_value = {
+        # Override validate_api_token dependency
+        async def override_validate_api_token(authorization: str = None):
+            return {
                 "status": True,
                 "result": {
                     "username": "scanner@test.com",
@@ -415,43 +415,48 @@ class TestVulnerabilityImport:
                 }
             }
 
-            mock_c.get_images.return_value = {"status": False}
-            mock_c.insert_image.return_value = {"status": True}
-            mock_c.insert_image_vulnerabilities.return_value = {
-                "status": True,
-                "result": "2 vulnerabilities imported"
-            }
+        from vma.api.api import api_server
+        import vma.auth as a
+        api_server.dependency_overrides[a.validate_api_token] = override_validate_api_token
 
-            vuln_data = [
-                ["grype", "app", "1.0", "prod1", "team1", "CVE-2023-1234",
-                 "1.2.3", "2023-01-01", "2023-01-01", "deb", "libssl", "1.0.0", "/usr/lib"]
-            ]
+        mock_c = mock_router_dependencies["connector"]
 
-            response = await client.post(
-                "/api/v1/import",
-                json={
-                    "scanner": "grype",
-                    "product": "prod1",
-                    "image": "app",
-                    "version": "1.0",
-                    "team": "team1",
-                    "data": vuln_data
-                },
-                headers={"Authorization": f"Bearer {mock_token}"}
-            )
+        mock_c.get_images.return_value = {"status": False}
+        mock_c.insert_image.return_value = {"status": True}
+        mock_c.insert_image_vulnerabilities.return_value = {
+            "status": True,
+            "result": "2 vulnerabilities imported"
+        }
 
-            assert response.status_code == status.HTTP_200_OK
-            mock_c.insert_image_vulnerabilities.assert_called_once_with(vuln_data)
+        vuln_data = [
+            ["grype", "app", "1.0", "prod1", "team1", "CVE-2023-1234",
+             "1.2.3", "2023-01-01", "2023-01-01", "deb", "libssl", "1.0.0", "/usr/lib"]
+        ]
+
+        response = await client.post(
+            "/api/v1/import",
+            json={
+                "scanner": "grype",
+                "product": "prod1",
+                "image": "app",
+                "version": "1.0",
+                "team": "team1",
+                "data": vuln_data
+            },
+            headers={"Authorization": f"Bearer {mock_token}"}
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        mock_c.insert_image_vulnerabilities.assert_called_once_with(vuln_data)
 
     @pytest.mark.asyncio
     async def test_import_creates_image_if_not_exists(self, client, mock_router_dependencies):
         """Test that import creates image if it doesn't exist"""
         mock_token = "vma_test123456789012345678901234567890"
 
-        with patch("vma.api.routers.v1.a.validate_api_token") as mock_validate:
-            mock_c = mock_router_dependencies["connector"]
-
-            mock_validate.return_value = {
+        # Override validate_api_token dependency
+        async def override_validate_api_token(authorization: str = None):
+            return {
                 "status": True,
                 "result": {
                     "username": "scanner@test.com",
@@ -460,34 +465,45 @@ class TestVulnerabilityImport:
                 }
             }
 
-            # Image doesn't exist
-            mock_c.get_images.return_value = {"status": False}
-            mock_c.insert_image.return_value = {"status": True}
-            mock_c.insert_image_vulnerabilities.return_value = {
-                "status": True,
-                "result": "Imported"
-            }
+        from vma.api.api import api_server
+        import vma.auth as a
+        api_server.dependency_overrides[a.validate_api_token] = override_validate_api_token
 
-            response = await client.post(
-                "/api/v1/import",
-                json={
-                    "scanner": "grype",
-                    "product": "prod1",
-                    "image": "new_app",
-                    "version": "1.0",
-                    "team": "team1",
-                    "data": []
-                },
-                headers={"Authorization": f"Bearer {mock_token}"}
-            )
+        mock_c = mock_router_dependencies["connector"]
 
-            assert response.status_code == status.HTTP_200_OK
-            mock_c.insert_image.assert_called_once_with(
-                name="new_app",
-                version="1.0",
-                product="prod1",
-                team="team1"
-            )
+        # Image doesn't exist
+        mock_c.get_images.return_value = {"status": False}
+        mock_c.insert_image.return_value = {"status": True}
+        mock_c.insert_image_vulnerabilities.return_value = {
+            "status": True,
+            "result": "Imported"
+        }
+
+        vuln_data = [
+            ["grype", "new_app", "1.0", "prod1", "team1", "CVE-2023-9999",
+             "", "2023-01-01", "2023-01-01", "npm", "express", "4.0.0", "/app/node_modules"]
+        ]
+
+        response = await client.post(
+            "/api/v1/import",
+            json={
+                "scanner": "grype",
+                "product": "prod1",
+                "image": "new_app",
+                "version": "1.0",
+                "team": "team1",
+                "data": vuln_data
+            },
+            headers={"Authorization": f"Bearer {mock_token}"}
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        mock_c.insert_image.assert_called_once_with(
+            name="new_app",
+            version="1.0",
+            product="prod1",
+            team="team1"
+        )
 
     @pytest.mark.asyncio
     async def test_import_unauthorized_team_forbidden(self, client):
@@ -525,14 +541,13 @@ class TestVulnerabilityImport:
             assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
     @pytest.mark.asyncio
-    async def test_import_missing_data_fails(self, client, mock_helper_errors):
+    async def test_import_missing_data_fails(self, client, mock_helper_errors, mock_router_dependencies):
         """Test that import without data fails"""
         mock_token = "vma_test123456789012345678901234567890"
 
-        with patch("vma.api.routers.v1.a.validate_api_token") as mock_validate, \
-             patch("vma.api.routers.v1.helper") as mock_helper:
-
-            mock_validate.return_value = {
+        # Override validate_api_token dependency
+        async def override_validate_api_token(authorization: str = None):
+            return {
                 "status": True,
                 "result": {
                     "username": "scanner@test.com",
@@ -541,23 +556,28 @@ class TestVulnerabilityImport:
                 }
             }
 
-            mock_helper.validate_input.side_effect = lambda x: x
-            mock_helper.errors = mock_helper_errors
+        from vma.api.api import api_server
+        import vma.auth as a
+        api_server.dependency_overrides[a.validate_api_token] = override_validate_api_token
 
-            response = await client.post(
-                "/api/v1/import",
-                json={
-                    "scanner": "grype",
-                    "product": "",
-                    "image": "app",
-                    "version": "1.0",
-                    "team": "team1",
-                    "data": []
-                },
-                headers={"Authorization": f"Bearer {mock_token}"}
-            )
+        mock_helper = mock_router_dependencies["helper"]
+        mock_helper.validate_input.side_effect = lambda x: x
+        mock_helper.errors = mock_helper_errors
 
-            assert response.status_code == status.HTTP_400_BAD_REQUEST
+        response = await client.post(
+            "/api/v1/import",
+            json={
+                "scanner": "grype",
+                "product": "",
+                "image": "app",
+                "version": "1.0",
+                "team": "team1",
+                "data": []
+            },
+            headers={"Authorization": f"Bearer {mock_token}"}
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 
 class TestGrypeParser:

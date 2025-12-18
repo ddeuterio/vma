@@ -209,8 +209,9 @@ class TestVulnerabilityScanningWorkflow:
             assert response_token.status_code == status.HTTP_200_OK
             api_token = response_token.json()["result"]["token"]
 
-            # Step 2: Import scan results using API token
-            mock_auth.validate_api_token.return_value = {
+        # Step 2: Import scan results using API token (override validate_api_token dependency)
+        async def override_validate_api_token(authorization: str = None):
+            return {
                 "status": True,
                 "result": {
                     "username": "scanner@test.com",
@@ -219,64 +220,68 @@ class TestVulnerabilityScanningWorkflow:
                 }
             }
 
-            mock_c.get_images.return_value = {"status": False}
-            mock_c.insert_image.return_value = {"status": True}
-            mock_c.insert_image_vulnerabilities.return_value = {
-                "status": True,
-                "result": "5 vulnerabilities imported"
+        api_server.dependency_overrides[a.validate_api_token] = override_validate_api_token
+
+        mock_c = mock_router_dependencies["connector"]
+        mock_c.get_images.return_value = {"status": False}
+        mock_c.insert_image.return_value = {"status": True}
+        mock_c.insert_image_vulnerabilities.return_value = {
+            "status": True,
+            "result": "5 vulnerabilities imported"
+        }
+
+        vuln_data = [
+            ["grype", "api", "2.1.0", "backend", "security", "CVE-2023-1234",
+             "2.1.1", "2023-01-01", "2023-01-01", "deb", "libssl", "1.1.1", "/usr/lib"]
+        ]
+
+        response_import = await client.post(
+            "/api/v1/import",
+            json={
+                "scanner": "grype",
+                "product": "backend",
+                "image": "api",
+                "version": "2.1.0",
+                "team": "security",
+                "data": vuln_data
+            },
+            headers={"Authorization": f"Bearer {api_token}"}
+        )
+
+        assert response_import.status_code == status.HTTP_200_OK
+
+        # Step 3: View vulnerabilities (as authenticated user)
+        user_token = mod_v1.JwtData(
+            username="security-user@test.com",
+            scope={"security": "read"},
+            root=False
+        )
+
+        async def override_user():
+            return user_token
+
+        api_server.dependency_overrides[a.validate_access_token] = override_user
+
+        mock_helper = mock_router_dependencies["helper"]
+        mock_helper.format_vulnerability_rows.return_value = [
+            {
+                "cve": "CVE-2023-1234",
+                "component": "libssl",
+                "cvss": {"score": 7.5, "severity": "HIGH"}
             }
+        ]
 
-            vuln_data = [
-                ["grype", "api", "2.1.0", "backend", "security", "CVE-2023-1234",
-                 "2.1.1", "2023-01-01", "2023-01-01", "deb", "libssl", "1.1.1", "/usr/lib"]
-            ]
+        mock_c.get_image_vulnerabilities.return_value = {
+            "status": True,
+            "result": []
+        }
 
-            response_import = await client.post(
-                "/api/v1/import",
-                json={
-                    "scanner": "grype",
-                    "product": "backend",
-                    "image": "api",
-                    "version": "2.1.0",
-                    "team": "security",
-                    "data": vuln_data
-                },
-                headers={"Authorization": f"Bearer {api_token}"}
-            )
+        response_vulns = await client.get(
+            "/api/v1/image/security/backend/api/2.1.0/vuln",
+            headers={"Authorization": "Bearer user_token"}
+        )
 
-            assert response_import.status_code == status.HTTP_200_OK
-
-            # Step 3: View vulnerabilities (as authenticated user)
-            user_token = mod_v1.JwtData(
-                username="security-user@test.com",
-                scope={"security": "read"},
-                root=False
-            )
-
-            async def override_user():
-                return user_token
-
-            api_server.dependency_overrides[a.validate_access_token] = override_user
-
-            mock_helper.format_vulnerability_rows.return_value = [
-                {
-                    "cve": "CVE-2023-1234",
-                    "component": "libssl",
-                    "cvss": {"score": 7.5, "severity": "HIGH"}
-                }
-            ]
-
-            mock_c.get_image_vulnerabilities.return_value = {
-                "status": True,
-                "result": []
-            }
-
-            response_vulns = await client.get(
-                "/api/v1/image/security/backend/api/2.1.0/vuln",
-                headers={"Authorization": "Bearer user_token"}
-            )
-
-            assert response_vulns.status_code == status.HTTP_200_OK
+        assert response_vulns.status_code == status.HTTP_200_OK
 
 
 class TestImageUpdateWorkflow:
@@ -301,12 +306,9 @@ class TestImageUpdateWorkflow:
 
         api_server.dependency_overrides[a.validate_access_token] = override_token
 
-        with patch("vma.api.routers.v1.a.validate_api_token") as mock_validate_api:
-            mock_c = mock_router_dependencies["connector"]
-            mock_helper = mock_router_dependencies["helper"]
-
-            # Step 1: Import new version
-            mock_validate_api.return_value = {
+        # Step 1: Import new version (override validate_api_token for API token auth)
+        async def override_validate_api_token(authorization: str = None):
+            return {
                 "status": True,
                 "result": {
                     "username": "scanner@test.com",
@@ -315,55 +317,70 @@ class TestImageUpdateWorkflow:
                 }
             }
 
-            mock_c.get_images.return_value = {"status": False}
-            mock_c.insert_image.return_value = {"status": True}
-            mock_c.insert_image_vulnerabilities.return_value = {
-                "status": True,
-                "result": "3 vulnerabilities imported"
-            }
+        api_server.dependency_overrides[a.validate_api_token] = override_validate_api_token
 
-            response_import = await client.post(
-                "/api/v1/import",
-                json={
-                    "scanner": "grype",
-                    "product": "frontend",
-                    "image": "web-ui",
-                    "version": "2.0.0",
-                    "team": "development",
-                    "data": []
-                },
-                headers={"Authorization": "Bearer api_token"}
-            )
+        mock_c = mock_router_dependencies["connector"]
+        mock_helper = mock_router_dependencies["helper"]
 
-            assert response_import.status_code == status.HTTP_200_OK
+        mock_c.get_images.return_value = {"status": False}
+        mock_c.insert_image.return_value = {"status": True}
+        mock_c.insert_image_vulnerabilities.return_value = {
+            "status": True,
+            "result": "3 vulnerabilities imported"
+        }
 
-            # Step 2: Compare versions
-            mock_helper.normalize_comparison.return_value = {
-                "stats": {
-                    "shared": 2,
-                    "only_version_a": 5,  # Fixed in new version
-                    "only_version_b": 1   # New vulnerability
-                },
-                "comparison": []
-            }
+        vuln_data = [
+            ["grype", "web-ui", "2.0.0", "frontend", "development", "CVE-2023-5678",
+             "", "2023-01-01", "2023-01-01", "npm", "react", "17.0.0", "/app/node_modules"]
+        ]
 
-            mock_c.compare_image_versions.return_value = {
-                "status": True,
-                "result": []
-            }
+        response_import = await client.post(
+            "/api/v1/import",
+            json={
+                "scanner": "grype",
+                "product": "frontend",
+                "image": "web-ui",
+                "version": "2.0.0",
+                "team": "development",
+                "data": vuln_data
+            },
+            headers={"Authorization": "Bearer api_token"}
+        )
 
-            response_compare = await client.get(
-                "/api/v1/image/compare/development/frontend/web-ui/1.0.0/2.0.0",
-                headers={"Authorization": "Bearer user_token"}
-            )
+        assert response_import.status_code == status.HTTP_200_OK
 
-            assert response_compare.status_code == status.HTTP_200_OK
-            stats = response_compare.json()["result"]["stats"]
+        # Step 2: Compare versions (switch back to JWT auth for user)
+        api_server.dependency_overrides[a.validate_access_token] = override_token
 
-            # Verify we can see fixed and new vulnerabilities
-            assert stats["only_version_a"] == 5  # Fixed
-            assert stats["only_version_b"] == 1  # New
-            assert stats["shared"] == 2
+        # Reset mocks for compare step - need to override side_effect, not return_value
+        mock_router_dependencies["connector"].compare_image_versions.return_value = {
+            "status": True,
+            "result": []
+        }
+
+        # Override side_effect (fixture sets it to lambda x: x)
+        mock_router_dependencies["helper"].normalize_comparison.side_effect = None
+        mock_router_dependencies["helper"].normalize_comparison.return_value = {
+            "stats": {
+                "shared": 2,
+                "only_version_a": 5,  # Fixed in new version
+                "only_version_b": 1   # New vulnerability
+            },
+            "comparison": []
+        }
+
+        response_compare = await client.get(
+            "/api/v1/image/compare/development/frontend/web-ui/1.0.0/2.0.0",
+            headers={"Authorization": "Bearer user_token"}
+        )
+
+        assert response_compare.status_code == status.HTTP_200_OK
+        stats = response_compare.json()["result"]["stats"]
+
+        # Verify we can see fixed and new vulnerabilities
+        assert stats["only_version_a"] == 5  # Fixed
+        assert stats["only_version_b"] == 1  # New
+        assert stats["shared"] == 2
 
 
 class TestMultiTeamCollaboration:
@@ -608,7 +625,7 @@ class TestUserPermissionChanges:
     """Test impact of changing user permissions"""
 
     @pytest.mark.asyncio
-    async def test_permission_upgrade_workflow(self, client):
+    async def test_permission_upgrade_workflow(self, client, mock_helper_errors):
         """
         Test permission upgrade workflow:
         1. User has read-only access
@@ -630,7 +647,7 @@ class TestUserPermissionChanges:
 
         with patch("vma.api.routers.v1.helper") as mock_helper:
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_helper.errors = {"401": "user is not authorized to perform this action"}
+            mock_helper.errors = mock_helper_errors
 
             response_fail = await client.post(
                 "/api/v1/product",
@@ -644,11 +661,11 @@ class TestUserPermissionChanges:
 
             assert response_fail.status_code == status.HTTP_401_UNAUTHORIZED
 
-        # Step 3: Admin upgrades permission
+        # Step 3: Root user upgrades permission (only root can update other users)
         admin_token = mod_v1.JwtData(
             username="admin@test.com",
             scope={"engineering": "admin"},
-            root=False
+            root=True
         )
 
         async def override_admin():
@@ -661,6 +678,7 @@ class TestUserPermissionChanges:
 
             mock_helper.validate_input.side_effect = lambda x: x
             mock_helper.validate_scopes.return_value = {"engineering": "write"}
+            mock_helper.errors = mock_helper_errors
 
             mock_c.update_users.return_value = {
                 "status": True,
@@ -697,6 +715,7 @@ class TestUserPermissionChanges:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
+            mock_helper.errors = mock_helper_errors
             mock_c.insert_product.return_value = {
                 "status": True,
                 "result": {"id": "new-service"}

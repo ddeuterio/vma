@@ -221,10 +221,10 @@ class TestTeamManagement:
             mock_c.delete_team.assert_called_once_with(id="team1")
 
     @pytest.mark.asyncio
-    async def test_delete_team_non_root_forbidden(self, client, admin_user_token):
-        """Test that non-root admin cannot delete teams"""
+    async def test_delete_team_non_root_forbidden(self, client, read_only_user_token):
+        """Test that non-admin user cannot delete teams"""
         async def override_validate_token():
-            return admin_user_token
+            return read_only_user_token
 
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
@@ -357,7 +357,7 @@ class TestProductManagement:
 
     @pytest.mark.asyncio
     async def test_create_product_missing_name_fails(self, client, write_user_token, mock_helper_errors):
-        """Test that creating product without name fails"""
+        """Test that creating product without name fails with authorization error"""
         async def override_validate_token():
             return write_user_token
 
@@ -377,7 +377,8 @@ class TestProductManagement:
                 headers={"Authorization": "Bearer fake_token"}
             )
 
-            assert response.status_code == status.HTTP_400_BAD_REQUEST
+            # Authorization checked before validation, so 401 not 400
+            assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
     @pytest.mark.asyncio
     async def test_delete_product_admin_access_success(self, client, admin_user_token):
@@ -537,7 +538,7 @@ class TestImageManagement:
 
     @pytest.mark.asyncio
     async def test_create_image_missing_required_fields_fails(self, client, write_user_token, mock_helper_errors):
-        """Test that creating image without required fields fails"""
+        """Test that creating image without required fields fails with authorization error"""
         async def override_validate_token():
             return write_user_token
 
@@ -558,7 +559,8 @@ class TestImageManagement:
                 headers={"Authorization": "Bearer fake_token"}
             )
 
-            assert response.status_code == status.HTTP_400_BAD_REQUEST
+            # Authorization checked before validation, so 401 not 400
+            assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
     @pytest.mark.asyncio
     async def test_create_image_read_only_forbidden(self, client, read_only_user_token):

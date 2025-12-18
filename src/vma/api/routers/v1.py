@@ -495,7 +495,7 @@ async def delete_team(
     team_id = helper.validate_input(id)
 
     if not is_authorized(
-        is_root=user_data.root, scope=user_data.scope, teams=[], op=ADMIN
+        is_root=user_data.root, scope=user_data.scope, teams=[team_id], op=ADMIN
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
@@ -883,6 +883,8 @@ async def get_api_token(
         token["token"] = None
 
         res = {"status": True, "result": token}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting API token: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -920,7 +922,8 @@ async def revoke_api_token(
             raise HTTPException(status_code=404, detail=q["result"])
 
         res = {"status": "success", "message": "Token revoked successfully"}
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error revoking API token: {e}")
         raise HTTPException(status_code=500, detail=str(e))

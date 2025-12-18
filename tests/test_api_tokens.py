@@ -56,11 +56,13 @@ class TestAPITokenGeneration:
 
     def test_generate_api_token_format(self):
         """Test that generated token has correct format"""
+        import re
         token = a.generate_api_token()
 
         assert token.startswith("vma_")
         assert len(token) > 12  # vma_ prefix + base64 encoded bytes
-        assert "_" not in token[4:]  # Base64 URL-safe encoding
+        # URL-safe base64 allows: A-Z, a-z, 0-9, hyphen, and underscore
+        assert re.match(r'^vma_[A-Za-z0-9_-]+$', token)
 
     def test_generate_api_token_uniqueness(self):
         """Test that each generated token is unique"""
@@ -662,10 +664,9 @@ class TestAPITokenUsageInImport:
         """Test that import endpoint accepts valid API token"""
         mock_token = "vma_test123456789012345678901234567890"
 
-        with patch("vma.api.routers.v1.a.validate_api_token") as mock_validate:
-            mock_c = mock_router_dependencies["connector"]
-
-            mock_validate.return_value = {
+        # Override validate_api_token dependency to return success
+        async def override_validate_api_token(authorization: str = None):
+            return {
                 "status": True,
                 "result": {
                     "username": "user@test.com",
@@ -675,27 +676,31 @@ class TestAPITokenUsageInImport:
                 }
             }
 
-            mock_c.get_images.return_value = {"status": False}
-            mock_c.insert_image.return_value = {"status": True}
-            mock_c.insert_image_vulnerabilities.return_value = {
-                "status": True,
-                "result": "Imported"
-            }
+        api_server.dependency_overrides[a.validate_api_token] = override_validate_api_token
 
-            response = await client.post(
-                "/api/v1/import",
-                json={
-                    "scanner": "grype",
-                    "product": "prod1",
-                    "image": "app",
-                    "version": "1.0",
-                    "team": "team1",
-                    "data": [["grype", "app", "1.0", "prod1", "team1", "CVE-2023-1234", "1.1", "2023-01-01", "2023-01-01", "deb", "libssl", "1.0", "/usr/lib"]]
-                },
-                headers={"Authorization": f"Bearer {mock_token}"}
-            )
+        mock_c = mock_router_dependencies["connector"]
 
-            assert response.status_code == status.HTTP_200_OK
+        mock_c.get_images.return_value = {"status": False}
+        mock_c.insert_image.return_value = {"status": True}
+        mock_c.insert_image_vulnerabilities.return_value = {
+            "status": True,
+            "result": "Imported"
+        }
+
+        response = await client.post(
+            "/api/v1/import",
+            json={
+                "scanner": "grype",
+                "product": "prod1",
+                "image": "app",
+                "version": "1.0",
+                "team": "team1",
+                "data": [["grype", "app", "1.0", "prod1", "team1", "CVE-2023-1234", "1.1", "2023-01-01", "2023-01-01", "deb", "libssl", "1.0", "/usr/lib"]]
+            },
+            headers={"Authorization": f"Bearer {mock_token}"}
+        )
+
+        assert response.status_code == status.HTTP_200_OK
 
     @pytest.mark.asyncio
     async def test_import_with_invalid_api_token(self, client):
