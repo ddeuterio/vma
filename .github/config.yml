@@ -3,5 +3,6 @@ python_version: "3.10"
 ci:
   run_lint: false
   run_tests: true
-  run_security: false
+  run_security: true
+  security_fail_on_error: true  # Fail build on HIGH/CRITICAL findings
   run_publish: true
