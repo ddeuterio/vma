@@ -4,5 +4,5 @@ ci:
   run_lint: false
   run_tests: true
   run_security: true
-  security_fail_on_error: false # Fail build on HIGH/CRITICAL findings
+  security_fail_on_error: true # Fail build on HIGH/CRITICAL findings
   run_publish: true
