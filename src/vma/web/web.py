@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Any
 
+import os
 import logging
 from loguru import logger
 from pathlib import Path
@@ -73,7 +74,13 @@ def create_web_app():
             token_endp = request.app.url_path_for("token")
             payload = {"username": form["username"], "password": form["password"]}
 
-            async with AsyncClient(base_url=str(request.base_url)) as client:
+            # Call the API endpoint using configured internal URL
+            async with (
+                AsyncClient(
+                    base_url="http://localhost:80",
+                    verify=False,  # TODO: this might give trouble when not using the docker compose setup
+                ) as client
+            ):
                 res = await client.post(token_endp, data=payload)
 
             if res.status_code != status.HTTP_200_OK:
@@ -139,7 +146,12 @@ def create_web_app():
 
         if user_data is None:
             logger.debug(f"Unauthenticated access to {full_path}, redirecting to login")
-            return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+            return _render_page(
+                request=request,
+                template_name="login.html",
+                context={"error": "User could not be validated"},
+                tokens={},
+            )
 
         return templates.TemplateResponse("index.html", {"request": request})
 
