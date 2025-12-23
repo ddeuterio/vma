@@ -259,6 +259,9 @@
 
         try {
             return await authState.refreshPromise;
+        } catch (error) {
+            handleSessionExpired('Session expired. Please sign in again.');
+            throw error;
         } finally {
             authState.refreshPromise = null;
         }
