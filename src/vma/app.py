@@ -6,6 +6,8 @@ from loguru import logger
 import vma.helper as helper
 import vma.nvd as nvd
 import vma.parser as par
+import vma.connector as c
+import vma.auth as a
 
 
 def setup_args():
@@ -34,6 +36,13 @@ def setup_args():
     importer.add_argument("--file", help="File path with vulns to import for an image")
     importer.add_argument("--secure", action="store_true", help="HTTPS mode")
     importer.add_argument("--token", help="Authentication token")
+    importer.add_argument(
+        "--ignore-cert",
+        action="store_true",
+        help="Ignore self-signed certificate warning",
+    )
+    login = subparsers.add_parser("login", help="Initialize users")
+    login.add_argument("--init", action="store_true", help="init users")
     return parser.parse_args()
 
 
@@ -79,12 +88,24 @@ def main():
                     "team": args.team,
                     "data": data,
                 }
-            res = requests.post(url=url, json=payload, headers=headers)
+            res = requests.post(
+                url=url, json=payload, headers=headers, verify=(not args.ignore_cert)
+            )
             res_json = res.json()
             if res_json["status"]:
                 logger.info("Import was successfull.")
             else:
                 logger.error("Import failed.")
+        elif args.mode == "login":
+            if args.init:
+                c.insert_teams(name="admin", description="Admin team")
+                c.insert_users(
+                    email="admin@vma.com",
+                    password=a.hasher.hash("changeme"),
+                    name="admin",
+                    scopes={"admin": "admin"},
+                    is_root=True,
+                )
     except Exception as e:
         logger.error(e)
         exit(0)
