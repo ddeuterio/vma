@@ -140,6 +140,11 @@ body {
     color: #3498db;
 }
 
+.nav-link.active:hover {
+    background: var(--sidebar-active);
+    color: #3498db;
+}
+
 .nav-link.active span {
     font-weight: 600;
 }
@@ -811,6 +816,11 @@ html[data-theme="dark"] .nav-link:hover {
 }
 
 html[data-theme="dark"] .nav-link.active {
+    background: rgba(96, 165, 250, 0.24);
+    color: #60a5fa;
+}
+
+html[data-theme="dark"] .nav-link.active:hover {
     background: rgba(96, 165, 250, 0.24);
     color: #60a5fa;
 }
@@ -1857,6 +1867,10 @@ html[data-theme="dark"] .results-card .no-results i {
 }
 
 .sidebar.collapsed .nav-link.active {
+    background: rgba(138, 180, 248, 0.22);
+}
+
+.sidebar.collapsed .nav-link.active:hover {
     background: rgba(138, 180, 248, 0.22);
 }
 
