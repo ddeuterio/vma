@@ -16,6 +16,15 @@ services:
     depends_on:
     - db
 
+  init_login:
+    image: vma:latest
+    env_file:
+    - .env
+    command: ["login", "--init"]
+    depends_on:
+        init_db:
+            condition: service_completed_successfully
+
   rev_proxy:
     build:
       context: rev_proxy/
@@ -24,16 +33,22 @@ services:
     ports:
     - "8443:443"
     - "8080:80"
-    depends_on:
-        init_db:
-            condition: service_completed_successfully
+    networks:
+      default:
+        aliases:
+          - vma.local
+          - www.vma.local
 
   web:
     image: web:latest
     env_file:
     - .env
+    environment:
+      # Internal API URL for service-to-service calls
+      # Use localhost (recommended) or rev_proxy for internal routing
+      - INTERNAL_API_URL=http://localhost:80
     depends_on:
-    -   rev_proxy
+    - rev_proxy
 
 volumes:
   pgdata:
