@@ -646,7 +646,7 @@ def insert_year_data(value) -> dict:
             with conn.cursor() as cur:
                 cur.execute(queries["insert_fetch_date"], value)
                 conn.commit()
-                logger.debug(f"Last fetched date was updated to {value}")
+                logger.debug(f"Last fetched date was updated to {str(value)}")
     except psql.Error as e:
         logger.error(f"PSQL error: {e}")
         res = False
