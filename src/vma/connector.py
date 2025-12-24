@@ -558,14 +558,26 @@ queries = {
     """,
 }
 
-conn_pool = pool.SimpleConnectionPool(
-    minconn=_min_conn,
-    maxconn=_max_conn,
-    host=_db_host,
-    dbname=_db_name,
-    user=_db_user,
-    password=_db_pass,
-)
+_conn_pool = None
+
+
+def get_conn():
+    global _conn_pool
+    if _conn_pool is None:
+        _conn_pool = pool.SimpleConnectionPool(
+            minconn=_min_conn,
+            maxconn=_max_conn,
+            host=_db_host,
+            dbname=_db_name,
+            user=_db_user,
+            password=_db_pass,
+        )
+    return _conn_pool.getconn()
+
+
+def put_conn(conn, close=False):
+    if _conn_pool is not None:
+        _conn_pool.putconn(conn, close=close)
 
 
 def get_all_years_nvd_sync() -> list | None:
@@ -576,7 +588,7 @@ def get_all_years_nvd_sync() -> list | None:
         Date of the last time that the vulnerabilities where updated
     """
     dt = None
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["get_nvd_sync_data"])
@@ -587,7 +599,7 @@ def get_all_years_nvd_sync() -> list | None:
     except Exception as e:
         logger.error(f"DB error: {e}")
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
 
     res = [i[0] for i in dt] if dt else None
     return res
@@ -601,7 +613,7 @@ def get_nvd_sync_data(year) -> tuple | None:
         Date of the last time that the vulnerabilities where updated
     """
     dt = None
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["get_nvd_sync_data"], year)
@@ -612,7 +624,7 @@ def get_nvd_sync_data(year) -> tuple | None:
     except Exception as e:
         logger.error(f"DB error: {e}")
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return dt
 
 
@@ -624,7 +636,7 @@ def get_last_fetched_date(year) -> dict:
         Date of the last time that the vulnerabilities where updated
     """
     dt = None
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["get_fetch_date"], (year,))
@@ -638,7 +650,7 @@ def get_last_fetched_date(year) -> dict:
     except Exception as e:
         logger.error(f"DB error: {e}")
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
 
     res = datetime.fromisoformat(dt[0]).astimezone() if dt else None
     return res
@@ -654,7 +666,7 @@ def insert_year_data(value) -> dict:
         Boolean with the result of the query
     """
     res = True
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["insert_fetch_date"], value)
@@ -667,7 +679,7 @@ def insert_year_data(value) -> dict:
         logger.error(f"DB error: {e}")
         res = False
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -682,7 +694,7 @@ def insert_vulnerabilities(data_cve: list, data_cvss: list) -> dict:
         dict structure with 'status' and 'result'
     """
     res = True
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             execute_values(cur, queries["insert_cve"], data_cve, page_size=_page_size)
@@ -696,7 +708,7 @@ def insert_vulnerabilities(data_cve: list, data_cvss: list) -> dict:
         logger.error(f"DB error: {e}")
         res = False
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return {"status": res, "result": {"num_cve": len(data_cve)}}
 
 
@@ -711,7 +723,7 @@ def get_vulnerabilities_by_id(id: str) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": {}}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["get_cves"], (id,))
@@ -769,7 +781,7 @@ def get_vulnerabilities_by_id(id: str) -> dict:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -784,7 +796,7 @@ def get_products(teams: list, id: Optional[str] = None) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": []}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             if id:
@@ -805,7 +817,7 @@ def get_products(teams: list, id: Optional[str] = None) -> dict:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -822,7 +834,7 @@ def insert_product(name: str, description: str, team: str) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["insert_product"], (name, description, team))
@@ -842,7 +854,7 @@ def insert_product(name: str, description: str, team: str) -> dict:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -858,7 +870,7 @@ def delete_product(id: str, team: str) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["delete_product"], (id, team))
@@ -873,7 +885,7 @@ def delete_product(id: str, team: str) -> dict:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -896,7 +908,7 @@ def get_images(
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": []}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             if product and name and version:
@@ -934,7 +946,7 @@ def get_images(
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -951,7 +963,7 @@ def insert_image(name: str, version: str, product: str, team: str) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": {}}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["insert_image"], (name, version, product, team))
@@ -976,7 +988,7 @@ def insert_image(name: str, version: str, product: str, team: str) -> dict:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -993,7 +1005,7 @@ def get_image_vulnerabilities(product: str, name: str, version: str, team: str) 
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -1012,7 +1024,7 @@ def get_image_vulnerabilities(product: str, name: str, version: str, team: str) 
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1037,7 +1049,7 @@ def insert_image_vulnerabilities(values: list) -> dict:
     Returns:
         dict structure with 'status' and 'result'
     """
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             execute_values(
@@ -1057,7 +1069,7 @@ def insert_image_vulnerabilities(values: list) -> dict:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1077,7 +1089,7 @@ def compare_image_versions(
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -1098,7 +1110,7 @@ def compare_image_versions(
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1117,7 +1129,7 @@ def delete_image(team, product, name=None, version=None) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             if version and name:
@@ -1142,7 +1154,7 @@ def delete_image(team, product, name=None, version=None) -> dict:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1156,7 +1168,7 @@ def get_users(email=None) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": []}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             if email:
@@ -1207,7 +1219,7 @@ def get_users(email=None) -> dict:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1221,7 +1233,7 @@ def get_users_w_hpass(email) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": []}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["get_users_by_email"], (email,))
@@ -1268,7 +1280,7 @@ def get_users_w_hpass(email) -> dict:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1284,7 +1296,7 @@ def insert_users(email, password, name, scopes, is_root=False) -> dict:
     Returns:
         dict structure with 'status' and 'result'
     """
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["insert_users"], (email, password, name, is_root))
@@ -1301,7 +1313,7 @@ def insert_users(email, password, name, scopes, is_root=False) -> dict:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1317,7 +1329,7 @@ def update_users(email, password=None, name=None, scopes=None, is_root=None) -> 
     Returns:
         dict structure with 'status' and 'result'
     """
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             res = get_users(email)
@@ -1363,7 +1375,7 @@ def update_users(email, password=None, name=None, scopes=None, is_root=None) -> 
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return {"status": True, "result": {"user": email}}
 
 
@@ -1378,7 +1390,7 @@ def delete_user(email) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["delete_user_by_email"], (email))
@@ -1393,7 +1405,7 @@ def delete_user(email) -> dict:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1407,7 +1419,7 @@ def get_teams(name=None) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": []}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             if name:
@@ -1429,7 +1441,7 @@ def get_teams(name=None) -> dict:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1444,7 +1456,7 @@ def insert_teams(name: str, description: str = "") -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["insert_teams"], (name, description))
@@ -1464,7 +1476,7 @@ def insert_teams(name: str, description: str = "") -> dict:
         logger.error(f"DB error: {e}")
         res["result"] = False
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1479,7 +1491,7 @@ def delete_team(id) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["delete_teams"], (id,))
@@ -1496,12 +1508,12 @@ def delete_team(id) -> dict:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
 def get_scope_by_user(email=None) -> dict:
-    conn = conn_pool.getconn()
+    conn = get_conn()
     res = {"status": True, "result": None}
     try:
         with conn.cursor() as cur:
@@ -1530,7 +1542,7 @@ def get_scope_by_user(email=None) -> dict:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1556,7 +1568,7 @@ def insert_api_token(
         dict: {"status": bool, "result": {id, prefix, created_at} or error}
     """
     res = {"status": False, "result": None}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -1578,7 +1590,7 @@ def insert_api_token(
         logger.error(f"Error inserting API token: {e}")
         res["result"] = str(e)
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1593,7 +1605,7 @@ def get_api_token_by_hash(token_hash: str) -> dict:
         dict: {"status": bool, "result": token_data or error}
     """
     res = {"status": False, "result": None}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["get_api_token_by_hash"], (token_hash,))
@@ -1619,7 +1631,7 @@ def get_api_token_by_hash(token_hash: str) -> dict:
         logger.error(f"Error getting API token: {e}")
         res["result"] = str(e)
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1634,7 +1646,7 @@ def get_api_token_by_prefix(prefix: str) -> dict:
         dict: {"status": bool, "result": token_data or error}
     """
     res = {"status": False, "result": None}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["get_api_token_by_prefix"], (prefix,))
@@ -1660,14 +1672,14 @@ def get_api_token_by_prefix(prefix: str) -> dict:
         logger.error(f"Error getting API token by prefix: {e}")
         res["result"] = str(e)
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
 def get_api_token_by_id(token_id: int) -> dict:
     """Get API token by ID."""
     res = {"status": False, "result": None}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["get_api_token_by_id"], (token_id,))
@@ -1696,7 +1708,7 @@ def get_api_token_by_id(token_id: int) -> dict:
         logger.error(f"Error getting API token: {e}")
         res["result"] = str(e)
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1711,7 +1723,7 @@ def list_api_tokens(user_email: Optional[str] = None) -> dict:
         dict: {"status": bool, "result": list of tokens or error}
     """
     res = {"status": False, "result": None}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             if not user_email:
@@ -1746,7 +1758,7 @@ def list_api_tokens(user_email: Optional[str] = None) -> dict:
         logger.error(f"Error getting API token: {e}")
         res["result"] = "Could not fetch tokens"
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1765,7 +1777,7 @@ def revoke_api_token(
         dict: {"status": bool, "result": success message or error}
     """
     res = {"status": False, "result": None}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             if admin:
@@ -1787,7 +1799,7 @@ def revoke_api_token(
         logger.error(f"Error getting API token: {e}")
         res["result"] = str(e)
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
 
 
@@ -1802,7 +1814,7 @@ def update_token_last_used(token_id: int) -> dict:
         dict: {"status": bool}
     """
     res = {"status": False, "result": None}
-    conn = conn_pool.getconn()
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(queries["update_token_last_used"], (token_id,))
@@ -1814,5 +1826,5 @@ def update_token_last_used(token_id: int) -> dict:
         logger.error(f"Error getting API token: {e}")
         res["result"] = str(e)
     finally:
-        conn_pool.putconn(conn)
+        put_conn(conn)
     return res
