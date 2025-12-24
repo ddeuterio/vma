@@ -11,6 +11,8 @@ CREATE TABLE users (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE INDEX idx_users_email ON users(email);
+
 CREATE TABLE user_team_scopes (
     user_email TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
     team_id    TEXT NOT NULL REFERENCES teams(name) ON DELETE CASCADE,
@@ -67,7 +69,9 @@ CREATE TABLE images (
     FOREIGN KEY (product, team) REFERENCES products(id, team) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_images_team ON images(team, product);
+CREATE INDEX idx_images_team_product ON images(team, product);
+CREATE INDEX idx_images_product_name_version ON images(product, name, version);
+CREATE INDEX idx_images_team ON images(team);
 
 CREATE TABLE image_vulnerabilities (
     scanner TEXT NOT NULL,
