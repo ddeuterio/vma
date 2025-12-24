@@ -510,10 +510,9 @@ class TestVulnerabilityImport:
         """Test that import to unauthorized team is forbidden"""
         mock_token = "vma_test123456789012345678901234567890"
 
-        with patch("vma.api.routers.v1.a.validate_api_token") as mock_validate, \
-             patch("vma.api.routers.v1.helper") as mock_helper:
-
-            mock_validate.return_value = {
+        # Override validate_api_token dependency
+        async def override_validate_api_token(authorization: str = None):
+            return {
                 "status": True,
                 "result": {
                     "username": "scanner@test.com",
@@ -522,6 +521,9 @@ class TestVulnerabilityImport:
                 }
             }
 
+        api_server.dependency_overrides[a.validate_api_token] = override_validate_api_token
+
+        with patch("vma.api.routers.v1.helper") as mock_helper:
             mock_helper.validate_input.side_effect = lambda x: x
             mock_helper.errors = {"401": "user is not authorized to perform this action"}
 
