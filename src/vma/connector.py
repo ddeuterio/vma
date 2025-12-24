@@ -7,12 +7,18 @@ from dotenv import load_dotenv
 from psycopg2.extras import execute_values
 from datetime import datetime
 
+# TODO: study asyncpg
+from psycopg2 import pool
+
 load_dotenv()
 
 _db_host = os.getenv("DB_HOST")
 _db_user = os.getenv("DB_USER")
 _db_pass = os.getenv("DB_PASS")
 _db_name = os.getenv("DB_NAME")
+_min_conn = int(os.getenv("MIN_CONN") or 2)
+_max_conn = int(os.getenv("MAX_CONN") or 20)
+_page_size = int(os.getenv("PAGE_SIZE") or 1000)
 
 queries = {
     "get_fetch_date": """
@@ -552,6 +558,15 @@ queries = {
     """,
 }
 
+conn_pool = pool.SimpleConnectionPool(
+    minconn=_min_conn,
+    maxconn=_max_conn,
+    host=_db_host,
+    dbname=_db_name,
+    user=_db_user,
+    password=_db_pass,
+)
+
 
 def get_all_years_nvd_sync() -> list | None:
     """
@@ -561,18 +576,18 @@ def get_all_years_nvd_sync() -> list | None:
         Date of the last time that the vulnerabilities where updated
     """
     dt = None
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["get_nvd_sync_data"])
-                dt = cur.fetchall()
-                logger.debug("All years gotten from the nvd_sync table")
+        with conn.cursor() as cur:
+            cur.execute(queries["get_nvd_sync_data"])
+            dt = cur.fetchall()
+            logger.debug("All years gotten from the nvd_sync table")
     except psql.Error as e:
         logger.error(f"PSQL error: {e}")
     except Exception as e:
         logger.error(f"DB error: {e}")
+    finally:
+        conn_pool.putconn(conn)
 
     res = [i[0] for i in dt] if dt else None
     return res
@@ -586,18 +601,18 @@ def get_nvd_sync_data(year) -> tuple | None:
         Date of the last time that the vulnerabilities where updated
     """
     dt = None
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["get_nvd_sync_data"], year)
-                dt = cur.fetchone()
-                logger.debug(f"Last date when {year} CVE data was updated was {dt}")
+        with conn.cursor() as cur:
+            cur.execute(queries["get_nvd_sync_data"], year)
+            dt = cur.fetchone()
+            logger.debug(f"Last date when {year} CVE data was updated was {dt}")
     except psql.Error as e:
         logger.error(f"PSQL error: {e}")
     except Exception as e:
         logger.error(f"DB error: {e}")
+    finally:
+        conn_pool.putconn(conn)
     return dt
 
 
@@ -609,21 +624,21 @@ def get_last_fetched_date(year) -> dict:
         Date of the last time that the vulnerabilities where updated
     """
     dt = None
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["get_fetch_date"], (year,))
-                dt = cur.fetchone()
-                if dt:
-                    logger.debug(f"Last date when CVE data was updated was {dt[0]}")
-                else:
-                    logger.debug("Couldn't fecth the update date")
+        with conn.cursor() as cur:
+            cur.execute(queries["get_fetch_date"], (year,))
+            dt = cur.fetchone()
+            if dt:
+                logger.debug(f"Last date when CVE data was updated was {dt[0]}")
+            else:
+                logger.debug("Couldn't fecth the update date")
     except psql.Error as e:
         logger.error(f"PSQL error: {e}")
     except Exception as e:
         logger.error(f"DB error: {e}")
+    finally:
+        conn_pool.putconn(conn)
 
     res = datetime.fromisoformat(dt[0]).astimezone() if dt else None
     return res
@@ -639,20 +654,20 @@ def insert_year_data(value) -> dict:
         Boolean with the result of the query
     """
     res = True
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["insert_fetch_date"], value)
-                conn.commit()
-                logger.debug(f"Last fetched date was updated to {str(value)}")
+        with conn.cursor() as cur:
+            cur.execute(queries["insert_fetch_date"], value)
+            conn.commit()
+            logger.debug(f"Last fetched date was updated to {str(value)}")
     except psql.Error as e:
         logger.error(f"PSQL error: {e}")
         res = False
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = False
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -667,22 +682,21 @@ def insert_vulnerabilities(data_cve: list, data_cvss: list) -> dict:
         dict structure with 'status' and 'result'
     """
     res = True
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                execute_values(cur, queries["insert_cve"], data_cve)
-                conn.commit()
-                execute_values(cur, queries["insert_cvss"], data_cvss)
-                conn.commit()
-
+        with conn.cursor() as cur:
+            execute_values(cur, queries["insert_cve"], data_cve, page_size=_page_size)
+            conn.commit()
+            execute_values(cur, queries["insert_cvss"], data_cvss, page_size=_page_size)
+            conn.commit()
     except psql.Error as e:
         logger.error(f"PSQL error: {e}")
         res = False
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = False
+    finally:
+        conn_pool.putconn(conn)
     return {"status": res, "result": {"num_cve": len(data_cve)}}
 
 
@@ -697,13 +711,12 @@ def get_vulnerabilities_by_id(id: str) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": {}}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["get_cves"], (id,))
-                aux = cur.fetchall()
+        with conn.cursor() as cur:
+            cur.execute(queries["get_cves"], (id,))
+            aux = cur.fetchall()
+
         logger.debug(
             f"A total of {len(aux)} vulnerabilities have been found for the filter {id}"
         )
@@ -755,6 +768,8 @@ def get_vulnerabilities_by_id(id: str) -> dict:
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -769,16 +784,14 @@ def get_products(teams: list, id: Optional[str] = None) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": []}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                if id:
-                    cur.execute(queries["get_product"], (id, teams))
-                else:
-                    cur.execute(queries["get_products"], (teams,))
-                q = cur.fetchall()
+        with conn.cursor() as cur:
+            if id:
+                cur.execute(queries["get_product"], (id, teams))
+            else:
+                cur.execute(queries["get_products"], (teams,))
+            q = cur.fetchall()
 
         if not q:
             res["status"] = False
@@ -791,6 +804,8 @@ def get_products(teams: list, id: Optional[str] = None) -> dict:
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -807,14 +822,12 @@ def insert_product(name: str, description: str, team: str) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["insert_product"], (name, description, team))
-                q = cur.fetchone()
-                conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(queries["insert_product"], (name, description, team))
+            q = cur.fetchone()
+            conn.commit()
 
         if q:
             res["result"] = {"id": q[0]}
@@ -828,6 +841,8 @@ def insert_product(name: str, description: str, team: str) -> dict:
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -843,22 +858,22 @@ def delete_product(id: str, team: str) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["delete_product"], (id, team))
-                if not cur.rowcount:
-                    res["status"] = False
-                else:
-                    res["result"] = {"deleted_rows": cur.rowcount}
+        with conn.cursor() as cur:
+            cur.execute(queries["delete_product"], (id, team))
+            if not cur.rowcount:
+                res["status"] = False
+            else:
+                res["result"] = {"deleted_rows": cur.rowcount}
     except psql.Error as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -881,25 +896,23 @@ def get_images(
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": []}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                if product and name and version:
-                    cur.execute(
-                        queries["get_images_by_name_version_product"],
-                        (name, version, product, teams),
-                    )
-                elif product and name:
-                    cur.execute(
-                        queries["get_images_by_name_product"], (name, product, teams)
-                    )
-                elif product:
-                    cur.execute(queries["get_images_by_product"], (product, teams))
-                else:
-                    cur.execute(queries["get_images"], (teams,))
-                q = cur.fetchall()
+        with conn.cursor() as cur:
+            if product and name and version:
+                cur.execute(
+                    queries["get_images_by_name_version_product"],
+                    (name, version, product, teams),
+                )
+            elif product and name:
+                cur.execute(
+                    queries["get_images_by_name_product"], (name, product, teams)
+                )
+            elif product:
+                cur.execute(queries["get_images_by_product"], (product, teams))
+            else:
+                cur.execute(queries["get_images"], (teams,))
+            q = cur.fetchall()
 
         if not q:
             logger.debug("No images were found")
@@ -920,6 +933,8 @@ def get_images(
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -936,14 +951,12 @@ def insert_image(name: str, version: str, product: str, team: str) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": {}}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["insert_image"], (name, version, product, team))
-                q = cur.fetchone()
-                conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(queries["insert_image"], (name, version, product, team))
+            q = cur.fetchone()
+            conn.commit()
 
         if not q:
             res["status"] = False
@@ -962,6 +975,8 @@ def insert_image(name: str, version: str, product: str, team: str) -> dict:
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -978,15 +993,13 @@ def get_image_vulnerabilities(product: str, name: str, version: str, team: str) 
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    queries["get_image_vulnerabilities"], (product, name, version, team)
-                )
-                q = cur.fetchall()
+        with conn.cursor() as cur:
+            cur.execute(
+                queries["get_image_vulnerabilities"], (product, name, version, team)
+            )
+            q = cur.fetchall()
 
         res["result"] = q
         logger.debug(
@@ -998,6 +1011,8 @@ def get_image_vulnerabilities(product: str, name: str, version: str, team: str) 
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1022,13 +1037,16 @@ def insert_image_vulnerabilities(values: list) -> dict:
     Returns:
         dict structure with 'status' and 'result'
     """
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                execute_values(cur, queries["insert_image_vulnerabilities"], values)
-                conn.commit()
+        with conn.cursor() as cur:
+            execute_values(
+                cur,
+                queries["insert_image_vulnerabilities"],
+                values,
+                page_size=_page_size,
+            )
+            conn.commit()
 
         logger.debug(f"A total of {len(values)} have been inserted")
         res = {"status": True, "result": {"num_cve": len(values)}}
@@ -1038,6 +1056,8 @@ def insert_image_vulnerabilities(values: list) -> dict:
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1057,16 +1077,14 @@ def compare_image_versions(
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    queries["compare_image_versions"],
-                    (team, product, image, version_a, product, image, version_b),
-                )
-                q = cur.fetchall()
+        with conn.cursor() as cur:
+            cur.execute(
+                queries["compare_image_versions"],
+                (team, product, image, version_a, product, image, version_b),
+            )
+            q = cur.fetchall()
 
         if not q:
             res["status"] = False
@@ -1079,6 +1097,8 @@ def compare_image_versions(
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1097,32 +1117,32 @@ def delete_image(team, product, name=None, version=None) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                if version and name:
-                    cur.execute(
-                        queries["delete_image_by_name_version"],
-                        (name, version, product, team),
-                    )
-                elif name:
-                    cur.execute(queries["delete_image_by_name"], (name, product, team))
-                if not cur.rowcount:
-                    logger.error(
-                        f"Image could not be deleted properly {name} {product} {team}"
-                    )
-                    res["status"] = False
-                else:
-                    logger.debug(f"Image was deleted properly {name} {product} {team}")
-                    res["result"] = {"deleted_rows": cur.rowcount}
+        with conn.cursor() as cur:
+            if version and name:
+                cur.execute(
+                    queries["delete_image_by_name_version"],
+                    (name, version, product, team),
+                )
+            elif name:
+                cur.execute(queries["delete_image_by_name"], (name, product, team))
+            if not cur.rowcount:
+                logger.error(
+                    f"Image could not be deleted properly {name} {product} {team}"
+                )
+                res["status"] = False
+            else:
+                logger.debug(f"Image was deleted properly {name} {product} {team}")
+                res["result"] = {"deleted_rows": cur.rowcount}
     except psql.Error as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1136,58 +1156,58 @@ def get_users(email=None) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": []}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
+        with conn.cursor() as cur:
+            if email:
+                cur.execute(queries["get_users_by_email"], (email,))
+            else:
+                cur.execute(queries["get_users"])
+            q = cur.fetchall()
+            if not q:
+                res["status"] = False
+                logger.debug(
+                    f"Did not found any users with the given parameters: {email}"
+                )
+            else:
+                logger.debug(f"Found a total of {len(q)} users")
+                aux = {}
+                for usr in q:
+                    aux[usr[0]] = {
+                        "name": usr[2],
+                        "is_root": usr[3],
+                        "scope": {},
+                    }
                 if email:
-                    cur.execute(queries["get_users_by_email"], (email,))
+                    cur.execute(queries["get_user_team_scopes_by_email"], (email,))
                 else:
-                    cur.execute(queries["get_users"])
+                    cur.execute(queries["get_user_team_scopes"])
                 q = cur.fetchall()
                 if not q:
-                    res["status"] = False
                     logger.debug(
-                        f"Did not found any users with the given parameters: {email}"
+                        f"Did not found any scope with the given parameters: {email}"
                     )
+                    res["status"] = False
                 else:
-                    logger.debug(f"Found a total of {len(q)} users")
-                    aux = {}
-                    for usr in q:
-                        aux[usr[0]] = {
-                            "name": usr[2],
-                            "is_root": usr[3],
-                            "scope": {},
-                        }
-                    if email:
-                        cur.execute(queries["get_user_team_scopes_by_email"], (email,))
-                    else:
-                        cur.execute(queries["get_user_team_scopes"])
-                    q = cur.fetchall()
-                    if not q:
-                        logger.debug(
-                            f"Did not found any scope with the given parameters: {email}"
-                        )
-                        res["status"] = False
-                    else:
-                        for sc in q:
-                            aux[sc[0]]["scope"][sc[1]] = sc[2]
+                    for sc in q:
+                        aux[sc[0]]["scope"][sc[1]] = sc[2]
 
-                        for k, v in aux.items():
-                            aux = {
-                                "email": k,
-                                "name": v["name"],
-                                "is_root": v["is_root"],
-                                "scope": v["scope"],
-                            }
-                            res["result"].append(aux)
+                    for k, v in aux.items():
+                        aux = {
+                            "email": k,
+                            "name": v["name"],
+                            "is_root": v["is_root"],
+                            "scope": v["scope"],
+                        }
+                        res["result"].append(aux)
     except psql.Error as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1201,54 +1221,54 @@ def get_users_w_hpass(email) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": []}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["get_users_by_email"], (email,))
+        with conn.cursor() as cur:
+            cur.execute(queries["get_users_by_email"], (email,))
+            q = cur.fetchall()
+            if not q:
+                res["status"] = False
+                logger.debug(
+                    f"Did not found any users with the given parameters: {email}"
+                )
+            else:
+                logger.debug(f"Found a total of {len(q)} users")
+                aux = {}
+                for usr in q:
+                    aux[usr[0]] = {
+                        "hpass": usr[1],
+                        "name": usr[2],
+                        "is_root": usr[3],
+                        "scope": {},
+                    }
+                cur.execute(queries["get_user_team_scopes_by_email"], (email,))
                 q = cur.fetchall()
                 if not q:
-                    res["status"] = False
                     logger.debug(
-                        f"Did not found any users with the given parameters: {email}"
+                        f"Did not found any scope with the given parameters: {email}"
                     )
+                    res["status"] = False
                 else:
-                    logger.debug(f"Found a total of {len(q)} users")
-                    aux = {}
-                    for usr in q:
-                        aux[usr[0]] = {
-                            "hpass": usr[1],
-                            "name": usr[2],
-                            "is_root": usr[3],
-                            "scope": {},
-                        }
-                    cur.execute(queries["get_user_team_scopes_by_email"], (email,))
-                    q = cur.fetchall()
-                    if not q:
-                        logger.debug(
-                            f"Did not found any scope with the given parameters: {email}"
-                        )
-                        res["status"] = False
-                    else:
-                        for sc in q:
-                            aux[sc[0]]["scope"][sc[1]] = sc[2]
+                    for sc in q:
+                        aux[sc[0]]["scope"][sc[1]] = sc[2]
 
-                        for k, v in aux.items():
-                            aux = {
-                                "email": k,
-                                "hpass": v["hpass"],
-                                "name": v["name"],
-                                "is_root": v["is_root"],
-                                "scope": v["scope"],
-                            }
-                            res["result"].append(aux)
+                    for k, v in aux.items():
+                        aux = {
+                            "email": k,
+                            "hpass": v["hpass"],
+                            "name": v["name"],
+                            "is_root": v["is_root"],
+                            "scope": v["scope"],
+                        }
+                        res["result"].append(aux)
     except psql.Error as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1264,15 +1284,13 @@ def insert_users(email, password, name, scopes, is_root=False) -> dict:
     Returns:
         dict structure with 'status' and 'result'
     """
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["insert_users"], (email, password, name, is_root))
-                for t, s in scopes.items():
-                    cur.execute(queries["insert_user_team_scopes"], (email, t, s))
-                conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(queries["insert_users"], (email, password, name, is_root))
+            for t, s in scopes.items():
+                cur.execute(queries["insert_user_team_scopes"], (email, t, s))
+            conn.commit()
 
         logger.debug(f"A new user {email} has been added")
         res = {"status": True, "result": {"user": email}}
@@ -1282,6 +1300,8 @@ def insert_users(email, password, name, scopes, is_root=False) -> dict:
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1297,46 +1317,44 @@ def update_users(email, password=None, name=None, scopes=None, is_root=None) -> 
     Returns:
         dict structure with 'status' and 'result'
     """
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                res = get_users(email)
-                original_email = res["result"][0]["email"] if res["status"] else ""
-                logger.debug(f"original email is {original_email}")
-                update_fields = []
-                fields = []
+        with conn.cursor() as cur:
+            res = get_users(email)
+            original_email = res["result"][0]["email"] if res["status"] else ""
+            logger.debug(f"original email is {original_email}")
+            update_fields = []
+            fields = []
 
-                if original_email != email:
-                    update_fields.append("email = %s")
-                    fields.append(email)
+            if original_email != email:
+                update_fields.append("email = %s")
+                fields.append(email)
 
-                if password:
-                    update_fields.append("hpass = %s")
-                    fields.append(password)
+            if password:
+                update_fields.append("hpass = %s")
+                fields.append(password)
 
-                if name:
-                    update_fields.append("name = %s")
-                    fields.append(name)
+            if name:
+                update_fields.append("name = %s")
+                fields.append(name)
 
-                if is_root is not None:
-                    update_fields.append("is_root = %s")
-                    fields.append(is_root)
+            if is_root is not None:
+                update_fields.append("is_root = %s")
+                fields.append(is_root)
 
-                if update_fields:
-                    fields.append(email)
-                    q = f"""
-                        UPDATE users SET {(", ").join(update_fields)} WHERE email = %s;
-                    """
-                    cur.execute(q, tuple(fields))
+            if update_fields:
+                fields.append(email)
+                q = f"""
+                    UPDATE users SET {(", ").join(update_fields)} WHERE email = %s;
+                """
+                cur.execute(q, tuple(fields))
 
-                if scopes:
-                    logger.debug("updating scopes")
-                    for t, s in scopes.items():
-                        logger.debug(f"team: {t}; scope: {s}")
-                        cur.execute(queries["insert_user_team_scopes"], (email, t, s))
-                conn.commit()
+            if scopes:
+                logger.debug("updating scopes")
+                for t, s in scopes.items():
+                    logger.debug(f"team: {t}; scope: {s}")
+                    cur.execute(queries["insert_user_team_scopes"], (email, t, s))
+            conn.commit()
         logger.debug(f"A user {email} has been updated")
     except psql.Error as e:
         logger.error(f"PSQL error: {e}")
@@ -1344,6 +1362,8 @@ def update_users(email, password=None, name=None, scopes=None, is_root=None) -> 
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return {"status": True, "result": {"user": email}}
 
 
@@ -1358,22 +1378,22 @@ def delete_user(email) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["delete_user_by_email"], (email))
-                if not cur.rowcount:
-                    res["status"] = False
-                else:
-                    res["result"] = {"deleted_rows": cur.rowcount}
+        with conn.cursor() as cur:
+            cur.execute(queries["delete_user_by_email"], (email))
+            if not cur.rowcount:
+                res["status"] = False
+            else:
+                res["result"] = {"deleted_rows": cur.rowcount}
     except psql.Error as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1387,16 +1407,14 @@ def get_teams(name=None) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": []}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                if name:
-                    cur.execute(queries["get_teams_by_name"], (name,))
-                else:
-                    cur.execute(queries["get_teams"])
-                q = cur.fetchall()
+        with conn.cursor() as cur:
+            if name:
+                cur.execute(queries["get_teams_by_name"], (name,))
+            else:
+                cur.execute(queries["get_teams"])
+            q = cur.fetchall()
 
         if not q:
             logger.debug("No teams where identified")
@@ -1410,6 +1428,8 @@ def get_teams(name=None) -> dict:
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1424,14 +1444,12 @@ def insert_teams(name: str, description: str = "") -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["insert_teams"], (name, description))
-                conn.commit()
-                q = cur.fetchone()
+        with conn.cursor() as cur:
+            cur.execute(queries["insert_teams"], (name, description))
+            conn.commit()
+            q = cur.fetchone()
 
         if q:
             res["result"] = {}
@@ -1445,6 +1463,8 @@ def insert_teams(name: str, description: str = "") -> dict:
     except Exception as e:
         logger.error(f"DB error: {e}")
         res["result"] = False
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1459,58 +1479,58 @@ def delete_team(id) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["delete_teams"], (id,))
-                if not cur.rowcount:
-                    logger.error(f"Team with id {id} could not be removed")
-                    res["status"] = False
-                else:
-                    logger.debug(f"Team with id {id} was removed")
-                    res["result"] = {"deleted_rows": cur.rowcount}
+        with conn.cursor() as cur:
+            cur.execute(queries["delete_teams"], (id,))
+            if not cur.rowcount:
+                logger.error(f"Team with id {id} could not be removed")
+                res["status"] = False
+            else:
+                logger.debug(f"Team with id {id} was removed")
+                res["result"] = {"deleted_rows": cur.rowcount}
     except psql.Error as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
 def get_scope_by_user(email=None) -> dict:
+    conn = conn_pool.getconn()
     res = {"status": True, "result": None}
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                if email:
-                    cur.execute(queries["get_user_team_scopes_by_email"], (email,))
-                else:
-                    cur.execute(queries["get_user_team_scopes"])
+        with conn.cursor() as cur:
+            if email:
+                cur.execute(queries["get_user_team_scopes_by_email"], (email,))
+            else:
+                cur.execute(queries["get_user_team_scopes"])
 
-                if not cur.rowcount:
+            if not cur.rowcount:
+                logger.error("Scopes for users could not be identified")
+                res["status"] = False
+            else:
+                q = cur.fetchall()
+                if not q:
                     logger.error("Scopes for users could not be identified")
                     res["status"] = False
                 else:
-                    q = cur.fetchall()
-                    if not q:
-                        logger.error("Scopes for users could not be identified")
-                        res["status"] = False
-                    else:
-                        logger.debug("Scopes for users were identified")
-                        res["result"] = {}
-                        for r in q:
-                            res["result"][r[1]] = r[2]
+                    logger.debug("Scopes for users were identified")
+                    res["result"] = {}
+                    for r in q:
+                        res["result"][r[1]] = r[2]
     except psql.Error as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1536,17 +1556,15 @@ def insert_api_token(
         dict: {"status": bool, "result": {id, prefix, created_at} or error}
     """
     res = {"status": False, "result": None}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    queries["insert_api_token"],
-                    (token_hash, prefix, user_email, description, expires_at),
-                )
-                q = cur.fetchone()
-                conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(
+                queries["insert_api_token"],
+                (token_hash, prefix, user_email, description, expires_at),
+            )
+            q = cur.fetchone()
+            conn.commit()
 
         if not q:
             raise Exception("API token could not be created")
@@ -1559,6 +1577,8 @@ def insert_api_token(
     except Exception as e:
         logger.error(f"Error inserting API token: {e}")
         res["result"] = str(e)
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1573,13 +1593,11 @@ def get_api_token_by_hash(token_hash: str) -> dict:
         dict: {"status": bool, "result": token_data or error}
     """
     res = {"status": False, "result": None}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["get_api_token_by_hash"], (token_hash,))
-                q = cur.fetchone()
+        with conn.cursor() as cur:
+            cur.execute(queries["get_api_token_by_hash"], (token_hash,))
+            q = cur.fetchone()
 
         if not q:
             logger.debug("Token not found")
@@ -1600,6 +1618,8 @@ def get_api_token_by_hash(token_hash: str) -> dict:
     except Exception as e:
         logger.error(f"Error getting API token: {e}")
         res["result"] = str(e)
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1614,46 +1634,44 @@ def get_api_token_by_prefix(prefix: str) -> dict:
         dict: {"status": bool, "result": token_data or error}
     """
     res = {"status": False, "result": None}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["get_api_token_by_prefix"], (prefix,))
-                q = cur.fetchone()
+        with conn.cursor() as cur:
+            cur.execute(queries["get_api_token_by_prefix"], (prefix,))
+            q = cur.fetchone()
 
-            if not q:
-                logger.debug("Token not found")
-                res["status"] = False
-                res["result"] = "Token not found"
-                return res
+        if not q:
+            logger.debug("Token not found")
+            res["status"] = False
+            res["result"] = "Token not found"
+            return res
 
-            res["status"] = True
-            res["result"] = {
-                "id": q[0],
-                "token_hash": q[1],
-                "user_email": q[2],
-                "revoked": q[3],
-                "expires_at": q[4],
-                "last_used_at": q[5],
-                "description": q[6],
-            }
+        res["status"] = True
+        res["result"] = {
+            "id": q[0],
+            "token_hash": q[1],
+            "user_email": q[2],
+            "revoked": q[3],
+            "expires_at": q[4],
+            "last_used_at": q[5],
+            "description": q[6],
+        }
     except Exception as e:
         logger.error(f"Error getting API token by prefix: {e}")
         res["result"] = str(e)
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
 def get_api_token_by_id(token_id: int) -> dict:
     """Get API token by ID."""
     res = {"status": False, "result": None}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["get_api_token_by_id"], (token_id,))
-                q = cur.fetchone()
+        with conn.cursor() as cur:
+            cur.execute(queries["get_api_token_by_id"], (token_id,))
+            q = cur.fetchone()
 
         if not q:
             logger.debug("Token not found")
@@ -1677,6 +1695,8 @@ def get_api_token_by_id(token_id: int) -> dict:
     except Exception as e:
         logger.error(f"Error getting API token: {e}")
         res["result"] = str(e)
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1691,17 +1711,15 @@ def list_api_tokens(user_email: Optional[str] = None) -> dict:
         dict: {"status": bool, "result": list of tokens or error}
     """
     res = {"status": False, "result": None}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                if not user_email:
-                    cur.execute(queries["list_all_api_tokens"])
-                else:
-                    cur.execute(queries["list_api_tokens_by_user"], (user_email,))
+        with conn.cursor() as cur:
+            if not user_email:
+                cur.execute(queries["list_all_api_tokens"])
+            else:
+                cur.execute(queries["list_api_tokens_by_user"], (user_email,))
 
-                q = cur.fetchall()
+            q = cur.fetchall()
 
         if q:
             tokens = []
@@ -1727,6 +1745,8 @@ def list_api_tokens(user_email: Optional[str] = None) -> dict:
     except Exception as e:
         logger.error(f"Error getting API token: {e}")
         res["result"] = "Could not fetch tokens"
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1745,18 +1765,16 @@ def revoke_api_token(
         dict: {"status": bool, "result": success message or error}
     """
     res = {"status": False, "result": None}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                if admin:
-                    cur.execute(queries["revoke_api_token_admin"], (token_id,))
-                else:
-                    cur.execute(queries["revoke_api_token"], (token_id, user_email))
+        with conn.cursor() as cur:
+            if admin:
+                cur.execute(queries["revoke_api_token_admin"], (token_id,))
+            else:
+                cur.execute(queries["revoke_api_token"], (token_id, user_email))
 
-                q = cur.fetchone()
-                conn.commit()
+            q = cur.fetchone()
+            conn.commit()
 
         if not q:
             logger.error("Token could not be revoked")
@@ -1768,6 +1786,8 @@ def revoke_api_token(
     except Exception as e:
         logger.error(f"Error getting API token: {e}")
         res["result"] = str(e)
+    finally:
+        conn_pool.putconn(conn)
     return res
 
 
@@ -1782,17 +1802,17 @@ def update_token_last_used(token_id: int) -> dict:
         dict: {"status": bool}
     """
     res = {"status": False, "result": None}
+    conn = conn_pool.getconn()
     try:
-        with psql.connect(
-            host=_db_host, dbname=_db_name, user=_db_user, password=_db_pass
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute(queries["update_token_last_used"], (token_id,))
-                conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(queries["update_token_last_used"], (token_id,))
+            conn.commit()
 
         res["status"] = True
         res["result"] = "Token updated successfully"
     except Exception as e:
         logger.error(f"Error getting API token: {e}")
         res["result"] = str(e)
+    finally:
+        conn_pool.putconn(conn)
     return res
