@@ -599,26 +599,30 @@ class TestAPITokenLifecycle:
 
             assert response_revoke.status_code == status.HTTP_200_OK
 
-            # Step 5: Verify token no longer works
-            mock_auth.validate_api_token.return_value = {
+        # Step 5: Verify token no longer works (outside the patch context)
+        # Override validate_api_token dependency to return revoked status
+        async def override_validate_revoked_token(authorization: str = None):
+            return {
                 "status": False,
                 "result": "Token has been revoked"
             }
 
-            response_use_revoked = await client.post(
-                "/api/v1/import",
-                json={
-                    "scanner": "grype",
-                    "product": "test",
-                    "image": "test",
-                    "version": "1.0",
-                    "team": "devops",
-                    "data": []
-                },
-                headers={"Authorization": f"Bearer {mock_token}"}
-            )
+        api_server.dependency_overrides[a.validate_api_token] = override_validate_revoked_token
 
-            assert response_use_revoked.status_code == status.HTTP_401_UNAUTHORIZED
+        response_use_revoked = await client.post(
+            "/api/v1/import",
+            json={
+                "scanner": "grype",
+                "product": "test",
+                "image": "test",
+                "version": "1.0",
+                "team": "devops",
+                "data": []
+            },
+            headers={"Authorization": f"Bearer {mock_token}"}
+        )
+
+        assert response_use_revoked.status_code == status.HTTP_401_UNAUTHORIZED
 
 
 class TestUserPermissionChanges:
