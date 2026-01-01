@@ -120,14 +120,15 @@ def get_modified_cves():
     logger.debug(f"Dates data_iso: {data_iso}; last_date: {last_date}")
 
     if (not last_date) or (data_iso > last_date):
-        if (data_iso - last_date) > timedelta(days=7):
+        # Check if we need to do a full sync (>7 days difference or no previous sync)
+        if (not last_date) or ((data_iso - last_date) > timedelta(days=7)):
             # check if there has been changes in files for years 2002 until now
             news = []
             meta = []
             for y in c.get_all_years_nvd_sync():
                 # Get the last updated time for the year
                 dt = c.get_nvd_sync_data(y)
-                y_date = datetime.fromisoformat(dt[1]).astimezone()
+                _date = datetime.fromisoformat(dt[1]).astimezone()
 
                 r = nvd_api_call(f"{base_url}/nvdcve-2.0-{y}.meta")
                 nvd_date = datetime.fromisoformat(
@@ -276,4 +277,3 @@ def parse_nvd_data(data):
         )
     logger.info(f"{len(p_data_cve)} CVEs has been parsed")
     return [p_data_cve, p_data_cvss]
-
