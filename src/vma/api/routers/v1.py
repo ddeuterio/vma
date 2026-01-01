@@ -292,10 +292,11 @@ async def image_compare(
     return res
 
 
-@router.get("/cve/{id}")
+@router.get("/cve/{src}/{id}")
 async def cve(
-    id: str, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
+    src: str, id: str, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
 ) -> dict:
+    src_val = helper.validate_input(src)
     cve_id = helper.validate_input(id)
 
     if not cve_id:
@@ -305,7 +306,12 @@ async def cve(
     res = None
     try:
         cve_id = f"%{helper.escape_like(cve_id)}%"
-        res = c.get_vulnerabilities_by_id(cve_id)
+        if src_val == "nvd":
+            res = c.get_vulnerabilities_by_id(id=cve_id)
+        elif src_val == "osv":
+            res = c.get_osv_by_ilike_id(osv_id=cve_id)
+        else:
+            res = {"status": False, "result": ""}
     except Exception as e:
         logger.error(f"Error getting a product: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])

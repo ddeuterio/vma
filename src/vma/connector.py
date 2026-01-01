@@ -556,6 +556,307 @@ queries = {
         WHERE
             id = %s;
     """,
+    "insert_osv_vulnerability": """
+        INSERT INTO osv_vulnerabilities
+            (osv_id, schema_version, modified, published, withdrawn, summary, details, database_specific)
+        VALUES %s
+        ON CONFLICT (osv_id)
+        DO UPDATE SET
+            schema_version = EXCLUDED.schema_version,
+            modified = EXCLUDED.modified,
+            published = EXCLUDED.published,
+            withdrawn = EXCLUDED.withdrawn,
+            summary = EXCLUDED.summary,
+            details = EXCLUDED.details,
+            database_specific = EXCLUDED.database_specific;
+    """,
+    "insert_osv_alias": """
+        INSERT INTO osv_aliases
+            (osv_id, alias)
+        VALUES %s
+        ON CONFLICT (osv_id, alias)
+        DO NOTHING;
+    """,
+    "insert_osv_reference": """
+        INSERT INTO osv_references
+            (osv_id, ref_type, url)
+        VALUES %s;
+    """,
+    "insert_osv_severity": """
+        INSERT INTO osv_severity
+            (osv_id, severity_type, score)
+        VALUES %s;
+    """,
+    "insert_osv_affected": """
+        INSERT INTO osv_affected
+            (osv_id, package_ecosystem, package_name, package_purl, ranges, versions, ecosystem_specific, database_specific)
+        VALUES %s;
+    """,
+    "insert_osv_credit": """
+        INSERT INTO osv_credits
+            (osv_id, name, contact, credit_type)
+        VALUES %s;
+    """,
+    "delete_osv_references": """
+        DELETE FROM osv_references WHERE osv_id = %s;
+    """,
+    "delete_osv_severity": """
+        DELETE FROM osv_severity WHERE osv_id = %s;
+    """,
+    "delete_osv_affected": """
+        DELETE FROM osv_affected WHERE osv_id = %s;
+    """,
+    "delete_osv_credits": """
+        DELETE FROM osv_credits WHERE osv_id = %s;
+    """,
+    "get_osv_by_id": """
+        SELECT
+            osv_id, schema_version, modified, published, withdrawn, summary, details, database_specific
+        FROM
+            osv_vulnerabilities
+        WHERE
+            osv_id = %s;
+    """,
+    "get_osvs": """
+        SELECT
+            v.osv_id,
+            v.schema_version,
+            v.modified,
+            v.published,
+            v.withdrawn,
+            v.summary,
+            v.details,
+            v.database_specific,
+            s.severity_type,
+            s.score
+        FROM
+            osv_vulnerabilities v
+        LEFT JOIN
+            osv_severity s ON v.osv_id = s.osv_id
+        WHERE
+            v.osv_id ILIKE %s
+        ORDER BY
+            v.osv_id DESC
+        LIMIT 100;
+    """,
+    "get_osv_aliases": """
+        SELECT
+            alias
+        FROM
+            osv_aliases
+        WHERE
+            osv_id = %s;
+    """,
+    "get_osv_by_cve": """
+        SELECT
+            v.osv_id, v.schema_version, v.modified, v.published, v.withdrawn, v.summary, v.details
+        FROM
+            osv_vulnerabilities v
+        INNER JOIN
+            osv_aliases a ON v.osv_id = a.osv_id
+        WHERE
+            a.alias = %s;
+    """,
+    "correlate_nvd_osv": """
+        SELECT
+            nv.cve_id,
+            nv.published_date as nvd_published,
+            nv.last_modified as nvd_modified,
+            ov.osv_id,
+            ov.published as osv_published,
+            ov.modified as osv_modified,
+            ov.summary,
+            ov.details
+        FROM
+            vulnerabilities nv
+        INNER JOIN
+            osv_aliases oa ON nv.cve_id = oa.alias
+        INNER JOIN
+            osv_vulnerabilities ov ON oa.osv_id = ov.osv_id
+        WHERE
+            nv.cve_id = %s;
+    """,
+    "get_combined_vulnerability_data": """
+        WITH input_vuln AS (
+            -- Determine if input is CVE or OSV ID and get base vulnerability info
+            SELECT
+                v.cve_id,
+                v.source_identifier,
+                v.published_date as nvd_published,
+                v.last_modified as nvd_modified,
+                v.vuln_status,
+                v.refs as nvd_refs,
+                v.descriptions as nvd_descriptions,
+                v.weakness,
+                v.configurations,
+                oa.osv_id
+            FROM vulnerabilities v
+            LEFT JOIN osv_aliases oa ON v.cve_id = oa.alias
+            WHERE v.cve_id = %s
+
+            UNION
+
+            SELECT
+                oa2.alias as cve_id,
+                v2.source_identifier,
+                v2.published_date as nvd_published,
+                v2.last_modified as nvd_modified,
+                v2.vuln_status,
+                v2.refs as nvd_refs,
+                v2.descriptions as nvd_descriptions,
+                v2.weakness,
+                v2.configurations,
+                ov.osv_id
+            FROM osv_vulnerabilities ov
+            LEFT JOIN osv_aliases oa2 ON ov.osv_id = oa2.osv_id AND oa2.alias LIKE 'CVE-%'
+            LEFT JOIN vulnerabilities v2 ON oa2.alias = v2.cve_id
+            WHERE ov.osv_id = %s
+        ),
+        nvd_cvss AS (
+            -- Get all CVSS metrics from NVD
+            SELECT
+                iv.cve_id,
+                json_agg(
+                    json_build_object(
+                        'source', cm.source,
+                        'cvss_version', cm.cvss_version,
+                        'vector_string', cm.vector_string,
+                        'base_score', cm.base_score,
+                        'base_severity', cm.base_severity
+                    ) ORDER BY cm.base_score DESC
+                ) as nvd_cvss_metrics
+            FROM input_vuln iv
+            LEFT JOIN cvss_metrics cm ON iv.cve_id = cm.cve_id
+            WHERE iv.cve_id IS NOT NULL
+            GROUP BY iv.cve_id
+        ),
+        osv_data AS (
+            -- Get OSV vulnerability details
+            SELECT
+                ov.osv_id,
+                ov.schema_version,
+                ov.modified as osv_modified,
+                ov.published as osv_published,
+                ov.withdrawn,
+                ov.summary as osv_summary,
+                ov.details as osv_details,
+                ov.database_specific as osv_database_specific
+            FROM input_vuln iv
+            JOIN osv_vulnerabilities ov ON iv.osv_id = ov.osv_id
+            WHERE iv.osv_id IS NOT NULL
+        ),
+        osv_aliases_agg AS (
+            -- Get all OSV aliases
+            SELECT
+                od.osv_id,
+                json_agg(oa.alias) as osv_aliases
+            FROM osv_data od
+            LEFT JOIN osv_aliases oa ON od.osv_id = oa.osv_id
+            GROUP BY od.osv_id
+        ),
+        osv_severity_agg AS (
+            -- Get OSV severity data
+            SELECT
+                od.osv_id,
+                json_agg(
+                    json_build_object(
+                        'type', os.severity_type,
+                        'score', os.score
+                    )
+                ) as osv_severity
+            FROM osv_data od
+            LEFT JOIN osv_severity os ON od.osv_id = os.osv_id
+            GROUP BY od.osv_id
+        ),
+        osv_refs_agg AS (
+            -- Get OSV references
+            SELECT
+                od.osv_id,
+                json_agg(
+                    json_build_object(
+                        'type', oref.ref_type,
+                        'url', oref.url
+                    )
+                ) as osv_references
+            FROM osv_data od
+            LEFT JOIN osv_references oref ON od.osv_id = oref.osv_id
+            GROUP BY od.osv_id
+        ),
+        osv_affected_agg AS (
+            -- Get OSV affected packages
+            SELECT
+                od.osv_id,
+                json_agg(
+                    json_build_object(
+                        'ecosystem', oaf.package_ecosystem,
+                        'package', oaf.package_name,
+                        'purl', oaf.package_purl,
+                        'ranges', oaf.ranges,
+                        'versions', oaf.versions,
+                        'ecosystem_specific', oaf.ecosystem_specific,
+                        'database_specific', oaf.database_specific
+                    )
+                ) as osv_affected
+            FROM osv_data od
+            LEFT JOIN osv_affected oaf ON od.osv_id = oaf.osv_id
+            GROUP BY od.osv_id
+        ),
+        osv_credits_agg AS (
+            -- Get OSV credits
+            SELECT
+                od.osv_id,
+                json_agg(
+                    json_build_object(
+                        'name', oc.name,
+                        'contact', oc.contact,
+                        'type', oc.credit_type
+                    )
+                ) as osv_credits
+            FROM osv_data od
+            LEFT JOIN osv_credits oc ON od.osv_id = oc.osv_id
+            GROUP BY od.osv_id
+        )
+        -- Final combined result
+        SELECT
+            iv.cve_id,
+            iv.source_identifier,
+            iv.nvd_published,
+            iv.nvd_modified,
+            iv.vuln_status,
+            iv.nvd_refs,
+            iv.nvd_descriptions,
+            iv.weakness,
+            iv.configurations,
+            nc.nvd_cvss_metrics,
+            od.osv_id,
+            od.schema_version,
+            od.osv_published,
+            od.osv_modified,
+            od.withdrawn,
+            od.osv_summary,
+            od.osv_details,
+            od.osv_database_specific,
+            oaa.osv_aliases,
+            osa.osv_severity,
+            ora.osv_references,
+            oafa.osv_affected,
+            oca.osv_credits,
+            CASE
+                WHEN iv.cve_id IS NOT NULL AND od.osv_id IS NOT NULL THEN 'both'
+                WHEN iv.cve_id IS NOT NULL THEN 'nvd_only'
+                WHEN od.osv_id IS NOT NULL THEN 'osv_only'
+                ELSE 'none'
+            END as data_source
+        FROM input_vuln iv
+        LEFT JOIN nvd_cvss nc ON iv.cve_id = nc.cve_id
+        LEFT JOIN osv_data od ON iv.osv_id = od.osv_id
+        LEFT JOIN osv_aliases_agg oaa ON od.osv_id = oaa.osv_id
+        LEFT JOIN osv_severity_agg osa ON od.osv_id = osa.osv_id
+        LEFT JOIN osv_refs_agg ora ON od.osv_id = ora.osv_id
+        LEFT JOIN osv_affected_agg oafa ON od.osv_id = oafa.osv_id
+        LEFT JOIN osv_credits_agg oca ON od.osv_id = oca.osv_id
+        LIMIT 1;
+    """,
 }
 
 _conn_pool = None
@@ -628,12 +929,15 @@ def get_nvd_sync_data(year) -> tuple | None:
     return dt
 
 
-def get_last_fetched_date(year) -> dict:
+def get_last_fetched_date(year) -> datetime | None:
     """
     Gets the date (extended ISO-8601 date/time format) of the last time that the database was updated.
 
+    Args:
+        year: Year identifier or 'recent' for recent updates
+
     Returns:
-        Date of the last time that the vulnerabilities where updated
+        datetime object of last fetch, or None if no sync record exists
     """
     dt = None
     conn = get_conn()
@@ -656,7 +960,7 @@ def get_last_fetched_date(year) -> dict:
     return res
 
 
-def insert_year_data(value) -> dict:
+def insert_year_data(value) -> bool:
     """
     Update the date of the last fetched value (extended ISO-8601 date/time format)
 
@@ -1827,4 +2131,296 @@ def update_token_last_used(token_id: int) -> dict:
         res["result"] = str(e)
     finally:
         put_conn(conn)
+    return res
+
+
+def insert_osv_data(
+    data_vuln: list,
+    data_aliases: list,
+    data_refs: list,
+    data_severity: list,
+    data_affected: list,
+    data_credits: list,
+) -> dict:
+    """
+    Inserts OSV (Open Source Vulnerability) data into the database.
+
+    Args:
+        data_vuln: List of tuples for osv_vulnerabilities table
+            (osv_id, schema_version, modified, published, withdrawn, summary, details, database_specific)
+        data_aliases: List of tuples for osv_aliases table
+            (osv_id, alias)
+        data_refs: List of tuples for osv_references table
+            (osv_id, ref_type, url)
+        data_severity: List of tuples for osv_severity table
+            (osv_id, severity_type, score)
+        data_affected: List of tuples for osv_affected table
+            (osv_id, package_ecosystem, package_name, package_purl, ranges, versions, ecosystem_specific, database_specific)
+        data_credits: List of tuples for osv_credits table
+            (osv_id, name, contact, credit_type)
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = True
+    osv_id = data_vuln[0][0] if data_vuln else None
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Insert main vulnerability record
+            if data_vuln:
+                execute_values(cur, queries["insert_osv_vulnerability"], data_vuln)
+                conn.commit()
+
+            # Insert aliases (including CVE mappings for NVD correlation)
+            if data_aliases:
+                execute_values(cur, queries["insert_osv_alias"], data_aliases)
+                conn.commit()
+
+            # For updates, delete existing child records and re-insert
+            # This ensures data consistency when OSV entries are updated
+            if osv_id:
+                cur.execute(queries["delete_osv_references"], (osv_id,))
+                cur.execute(queries["delete_osv_severity"], (osv_id,))
+                cur.execute(queries["delete_osv_affected"], (osv_id,))
+                cur.execute(queries["delete_osv_credits"], (osv_id,))
+                conn.commit()
+
+            # Insert child records
+            if data_refs:
+                execute_values(cur, queries["insert_osv_reference"], data_refs)
+                conn.commit()
+
+            if data_severity:
+                execute_values(cur, queries["insert_osv_severity"], data_severity)
+                conn.commit()
+
+            if data_affected:
+                execute_values(cur, queries["insert_osv_affected"], data_affected)
+                conn.commit()
+
+            if data_credits:
+                execute_values(cur, queries["insert_osv_credit"], data_credits)
+                conn.commit()
+
+            logger.info(
+                f"Inserted OSV {osv_id}: {len(data_aliases)} aliases, {len(data_refs)} refs, "
+                f"{len(data_severity)} severity, {len(data_affected)} affected, {len(data_credits)} credits"
+            )
+    except psql.Error as e:
+        logger.error(f"PSQL error inserting OSV data: {e}")
+        res = False
+    except Exception as e:
+        logger.error(f"Error inserting OSV data: {e}")
+        res = False
+    finally:
+        put_conn(conn)
+    return {"status": res, "result": {"osv_id": osv_id}}
+
+
+def get_osv_by_id(osv_id: str) -> dict:
+    """
+    Get OSV vulnerability by OSV ID.
+
+    Args:
+        osv_id: The OSV identifier (e.g., "OSV-2024-001", "GHSA-xxxx-yyyy-zzzz")
+
+    Returns:
+        dict structure with 'status' and 'result'
+        result contains: {osv_id, schema_version, modified, published, withdrawn, summary, details, database_specific}
+    """
+    res = {"status": False, "result": None}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(queries["get_osv_by_id"], (osv_id,))
+            q = cur.fetchone()
+
+        if not q:
+            logger.debug(f"OSV {osv_id} not found in database")
+            res["status"] = False
+            res["result"] = None
+        else:
+            res["status"] = True
+            res["result"] = {
+                "osv_id": q[0],
+                "schema_version": q[1],
+                "modified": q[2],
+                "published": q[3],
+                "withdrawn": q[4],
+                "summary": q[5],
+                "details": q[6],
+                "database_specific": q[7],
+            }
+            logger.debug(f"Found OSV {osv_id} in database")
+    except psql.Error as e:
+        logger.error(f"PSQL error getting OSV: {e}")
+        res["status"] = False
+    except Exception as e:
+        logger.error(f"Error getting OSV: {e}")
+        res["status"] = False
+    finally:
+        put_conn(conn)
+    return res
+
+
+def get_osv_by_ilike_id(osv_id: str) -> dict:
+    """
+    Get OSV vulnerability by OSV ID with severity data.
+
+    Args:
+        osv_id: The OSV identifier (e.g., "OSV-2024-001", "GHSA-xxxx-yyyy-zzzz")
+
+    Returns:
+        dict structure with 'status' and 'result'
+        result contains array of: {osv_id, schema_version, modified, published, withdrawn, summary, details, database_specific, severity}
+    """
+    res = {"status": False, "result": None}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(queries["get_osvs"], (osv_id,))
+            rows = cur.fetchall()
+
+        if not rows:
+            logger.debug(f"OSV {osv_id} not found in database")
+            res["status"] = False
+            res["result"] = None
+        else:
+            res["status"] = True
+            res["result"] = []
+
+            # Group rows by osv_id to aggregate severity data
+            osv_dict = {}
+            for row in rows:
+                current_osv_id = row[0]
+                severity_type = row[8]  # severity_type from LEFT JOIN
+                severity_score = row[9]  # score from LEFT JOIN
+
+                # Initialize OSV entry if not exists
+                if current_osv_id not in osv_dict:
+                    osv_dict[current_osv_id] = {
+                        "osv_id": current_osv_id,
+                        "schema_version": row[1],
+                        "modified": row[2],
+                        "published": row[3],
+                        "withdrawn": row[4],
+                        "summary": row[5],
+                        "details": row[6],
+                        "database_specific": row[7],
+                        "severity": {}
+                    }
+
+                # Add severity data if present (LEFT JOIN may return NULL)
+                if severity_type and severity_score:
+                    if severity_type not in osv_dict[current_osv_id]["severity"]:
+                        osv_dict[current_osv_id]["severity"][severity_type] = []
+                    osv_dict[current_osv_id]["severity"][severity_type].append({
+                        "score": severity_score
+                    })
+
+            # Convert dict to list (limit to 25 unique OSVs)
+            res["result"] = list(osv_dict.values())[:25]
+            logger.debug(f"Found {len(res['result'])} OSV results for {osv_id}")
+    except psql.Error as e:
+        logger.error(f"PSQL error getting OSV: {e}")
+        res["status"] = False
+    except Exception as e:
+        logger.error(f"Error getting OSV: {e}")
+        res["status"] = False
+    finally:
+        put_conn(conn)
+    return res
+
+
+def get_combined_vulnerability_data(vuln_id: str) -> dict:
+    """
+    Get combined vulnerability data from both NVD and OSV sources.
+
+    This function accepts either a CVE ID (e.g., CVE-2024-1234) or an OSV ID
+    (e.g., GHSA-xxxx-yyyy-zzzz, PYSEC-2024-123) and returns comprehensive
+    data from both sources when available.
+
+    Args:
+        vuln_id: Vulnerability identifier (CVE ID or OSV ID)
+
+    Returns:
+        dict structure with 'status' and 'result' containing:
+            - NVD data: cve_id, descriptions, CVSS metrics, weakness, configurations
+            - OSV data: osv_id, summary, details, severity, affected packages, references
+            - data_source: 'both', 'nvd_only', 'osv_only', or 'none'
+
+    Example:
+        >>> result = get_combined_vulnerability_data('CVE-2024-1234')
+        >>> if result['status']:
+        >>>     vuln = result['result']
+        >>>     print(f"CVE: {vuln['cve_id']}, OSV: {vuln['osv_id']}")
+        >>>     print(f"Data sources: {vuln['data_source']}")
+    """
+    res = {"status": True, "result": None}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Pass the ID twice - once for CVE lookup, once for OSV lookup
+            # The query's UNION will handle determining which one matches
+            cur.execute(queries["get_combined_vulnerability_data"], (vuln_id, vuln_id))
+            row = cur.fetchone()
+
+        if not row:
+            logger.warning(f"No vulnerability data found for ID: {vuln_id}")
+            res["status"] = False
+            res["result"] = {"error": f"No data found for {vuln_id}"}
+            return res
+
+        # Parse the result row
+        result = {
+            # NVD data
+            "cve_id": row[0],
+            "source_identifier": row[1],
+            "nvd_published": str(row[2]) if row[2] else None,
+            "nvd_modified": str(row[3]) if row[3] else None,
+            "vuln_status": row[4],
+            "nvd_refs": row[5],
+            "nvd_descriptions": row[6],
+            "weakness": row[7],
+            "configurations": row[8],
+            "nvd_cvss_metrics": row[9],  # Already JSON aggregated
+
+            # OSV data
+            "osv_id": row[10],
+            "schema_version": row[11],
+            "osv_published": str(row[12]) if row[12] else None,
+            "osv_modified": str(row[13]) if row[13] else None,
+            "withdrawn": str(row[14]) if row[14] else None,
+            "osv_summary": row[15],
+            "osv_details": row[16],
+            "osv_database_specific": row[17],
+            "osv_aliases": row[18],  # Already JSON aggregated
+            "osv_severity": row[19],  # Already JSON aggregated
+            "osv_references": row[20],  # Already JSON aggregated
+            "osv_affected": row[21],  # Already JSON aggregated
+            "osv_credits": row[22],  # Already JSON aggregated
+
+            # Metadata
+            "data_source": row[23]  # 'both', 'nvd_only', 'osv_only', or 'none'
+        }
+
+        res["result"] = result
+        logger.debug(
+            f"Combined vulnerability data retrieved for {vuln_id}: "
+            f"CVE={result['cve_id']}, OSV={result['osv_id']}, "
+            f"source={result['data_source']}"
+        )
+
+    except psql.Error as e:
+        logger.error(f"PSQL error getting combined vulnerability data: {e}")
+        res["status"] = False
+        res["result"] = {"error": str(e)}
+    except Exception as e:
+        logger.error(f"Error getting combined vulnerability data: {e}")
+        res["status"] = False
+        res["result"] = {"error": str(e)}
+    finally:
+        put_conn(conn)
+
     return res

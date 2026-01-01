@@ -5,6 +5,7 @@ from loguru import logger
 
 import vma.helper as helper
 import vma.nvd as nvd
+import vma.osv as osv
 import vma.parser as par
 import vma.connector as c
 import vma.auth as a
@@ -19,6 +20,16 @@ def setup_args():
     )
     nvd_parser.add_argument(
         "-u", "--update", action="store_true", help="Get updates from NVD"
+    )
+    osv_parser = subparsers.add_parser("osv", help="OSV database mode")
+    osv_parser.add_argument(
+        "-a", "--all", action="store_true", help="Download and process all OSV data"
+    )
+    osv_parser.add_argument(
+        "-r",
+        "--recent",
+        action="store_true",
+        help="Process only recently modified OSV entries",
     )
     importer = subparsers.add_parser("import", help="VMA importer mode")
     importer.add_argument(
@@ -55,6 +66,18 @@ def main():
                 nvd.init_db()
             elif args.update:
                 nvd.get_modified_cves()
+        # osv mode
+        elif args.mode == "osv":
+            if args.all:
+                logger.info("Starting OSV full database download and processing...")
+                osv.process_all()
+                logger.info("OSV full database processing complete")
+            elif args.recent:
+                logger.info("Starting OSV recent updates processing...")
+                osv.process_recent()
+                logger.info("OSV recent updates processing complete")
+            else:
+                logger.error("Please specify --all or --recent for OSV mode")
         # importer
         elif args.mode == "import":
             file = helper.validate_input(args.file)
