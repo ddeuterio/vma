@@ -8,8 +8,21 @@
         clearElement,
         fetchJSON,
         apiUrl,
-        setPageTitle
+        setPageTitle,
+        createMessageHelper,
+        normalizeApiResponse,
+        formatDate,
+        copyToClipboard,
+        createFormToggle,
+        selectHelpers,
+        components
     } = utils;
+
+    const {
+        createToolbar,
+        createTableCard,
+        createEmptyState
+    } = components;
 
     const { registerRoute, setActiveRoute } = router;
 
@@ -20,43 +33,6 @@
 
     const ensureRoot = () => Boolean(auth.isRoot?.());
 
-    function createMessageHelper(element) {
-        return {
-            show(message, type = 'info') {
-                if (!element) {
-                    return;
-                }
-                // Clear existing content
-                element.innerHTML = '';
-                element.className = `inline-message inline-message--${type}`;
-
-                // Create message text
-                const messageText = document.createElement('span');
-                messageText.textContent = message;
-                element.appendChild(messageText);
-
-                // Create close button
-                const closeBtn = document.createElement('button');
-                closeBtn.type = 'button';
-                closeBtn.className = 'inline-message-close';
-                closeBtn.innerHTML = '<i class="fas fa-times"></i>';
-                closeBtn.setAttribute('aria-label', 'Close message');
-                closeBtn.addEventListener('click', () => {
-                    this.hide();
-                });
-                element.appendChild(closeBtn);
-
-                element.hidden = false;
-            },
-            hide() {
-                if (!element) {
-                    return;
-                }
-                element.hidden = true;
-                element.innerHTML = '';
-            }
-        };
-    }
 
     function renderRestricted() {
         const root = document.getElementById('vmaContent');
@@ -87,24 +63,24 @@
 
         const wrapper = createElementWithAttrs('section', '', { class: 'users-page' });
 
-        const toolbar = createElementWithAttrs('div', '', { class: 'toolbar page-section' });
-        toolbar.appendChild(createElementWithAttrs('h2', 'Users'));
-        const toolbarActions = createElementWithAttrs('div', '', { class: 'toolbar-actions' });
-        const createToggle = createElementWithAttrs('button', '', {
-            type: 'button',
-            class: 'btn primary',
-            'data-user-create-toggle': ''
+        const toolbar = createToolbar({
+            title: 'Users',
+            buttons: [
+                {
+                    label: 'Create User',
+                    icon: 'fas fa-user-plus',
+                    className: 'btn primary',
+                    attributes: { 'data-user-create-toggle': '' }
+                },
+                {
+                    label: 'Delete User',
+                    icon: 'fas fa-user-minus',
+                    className: 'btn danger',
+                    attributes: { 'data-user-delete-toggle': '' }
+                }
+            ]
         });
-        createToggle.innerHTML = '<i class="fas fa-user-plus"></i> Create User';
-        const deleteToggle = createElementWithAttrs('button', '', {
-            type: 'button',
-            class: 'btn danger',
-            'data-user-delete-toggle': ''
-        });
-        deleteToggle.innerHTML = '<i class="fas fa-user-minus"></i> Delete User';
-        toolbarActions.appendChild(createToggle);
-        toolbarActions.appendChild(deleteToggle);
-        toolbar.appendChild(toolbarActions);
+        const [createToggle, deleteToggle] = toolbar.buttons;
 
         const createCard = createElementWithAttrs('div', '', { class: 'form-card page-section hidden-form' });
         createCard.innerHTML = `
@@ -168,26 +144,13 @@
             <div class="inline-message" data-user-delete-feedback hidden></div>
         `;
 
-        const listCard = createElementWithAttrs('div', '', { class: 'table-card page-section' });
-        listCard.innerHTML = `
-            <div class="table-header">
-                <h2>Existing Users</h2>
-                <span class="badge" data-user-count>0</span>
-            </div>
-            <div class="inline-message" data-user-list-feedback hidden></div>
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Email</th>
-                        <th>Name</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody data-user-rows>
-                    <tr><td colspan="3" class="empty">Loading…</td></tr>
-                </tbody>
-            </table>
-        `;
+        const { element: listCard, tbody: rowsBody, counter, feedback: listFeedback } = createTableCard({
+            title: 'Existing Users',
+            columns: ['Email', 'Name', ''],
+            dataAttribute: 'data-user-rows',
+            countAttribute: 'data-user-count',
+            feedbackAttribute: 'data-user-list-feedback'
+        });
 
         // Edit view (separate full-page view)
         const editView = createElementWithAttrs('div', '', { class: 'edit-view', 'data-edit-view': '', hidden: true });
@@ -342,9 +305,9 @@
             createFeedback: createCard.querySelector('[data-user-form-feedback]'),
             deleteFeedback: deleteCard.querySelector('[data-user-delete-feedback]'),
             deleteSelect: deleteCard.querySelector('#user-delete-select'),
-            listFeedback: listCard.querySelector('[data-user-list-feedback]'),
-            rowsBody: listCard.querySelector('[data-user-rows]'),
-            counter: listCard.querySelector('[data-user-count]'),
+            listFeedback,
+            rowsBody,
+            counter,
             scopeList: createCard.querySelector('[data-user-scope-list]'),
             rootToggle: createCard.querySelector('[data-user-root-toggle]'),
             editForm: editCard.querySelector('[data-user-edit-form]'),
@@ -377,7 +340,11 @@
         }
         const data = Array.isArray(state.users) ? state.users : [];
         if (!data.length) {
-            state.rowsBody.innerHTML = '<tr><td colspan="3" class="empty">No users yet.</td></tr>';
+            state.rowsBody.innerHTML = createEmptyState({
+                message: 'No users yet.',
+                colspan: 3,
+                context: 'table'
+            });
             state.counter.textContent = '0';
             return;
         }
@@ -406,22 +373,12 @@
         if (!state.deleteSelect) {
             return;
         }
-        const data = Array.isArray(state.users) ? state.users : [];
-        const previous = state.deleteSelect.value;
-        state.deleteSelect.innerHTML = '<option value="">Select a user…</option>';
-        data.forEach(user => {
-            const email = user.email ?? user[0];
-            if (!email) {
-                return;
-            }
-            state.deleteSelect.appendChild(createElementWithAttrs('option', email, { value: email }));
+        selectHelpers.populate(state.deleteSelect, state.users, {
+            valueKey: item => item.email ?? item[0],
+            labelKey: item => item.email ?? item[0],
+            placeholder: 'Select a user…',
+            preserveValue: true
         });
-        state.deleteSelect.disabled = !data.length;
-        if (data.some(user => (user.email ?? user[0]) === previous)) {
-            state.deleteSelect.value = previous;
-        } else {
-            state.deleteSelect.value = '';
-        }
     }
 
     function clearScopeSelections(container) {
@@ -490,7 +447,7 @@
         }
         try {
             const payload = await fetchJSON(apiUrl('/teams'));
-            state.teamOptions = Array.isArray(payload?.result) ? payload.result : payload || [];
+            state.teamOptions = normalizeApiResponse(payload);
             renderScopeOptions(state, state.scopeList);
             renderScopeOptions(state, state.editScopeList);
         } catch (error) {
@@ -649,7 +606,7 @@
         helpers.delete.hide();
         try {
             const payload = await fetchJSON(apiUrl('/users'));
-            state.users = Array.isArray(payload?.result) ? payload.result : payload || [];
+            state.users = normalizeApiResponse(payload);
             renderRows(state);
             updateDeleteOptions(state);
         } catch (error) {
@@ -880,56 +837,20 @@
     }
 
     function setupToggle(button, card, helper, labels, options = {}) {
-        if (!button || !card) {
-            return () => {};
-        }
-        const form = card.querySelector('form');
-        const firstField = form?.querySelector('input, textarea, select');
-        const handleHide = typeof options.onHide === 'function' ? options.onHide : () => {};
-        const updateButton = visible => {
-            button.innerHTML = visible ? labels.close : labels.open;
-            button.setAttribute('aria-expanded', String(visible));
-        };
-        const setVisible = visible => {
-            card.classList.toggle('show', visible);
-            updateButton(visible);
-            if (visible) {
-                helper.hide();
-                firstField?.focus();
-            } else {
-                form?.reset();
-                handleHide();
-            }
-        };
-        button.addEventListener('click', () => {
-            const next = !card.classList.contains('show');
-            setVisible(next);
+        const { onHide } = options;
+        const toggle = createFormToggle({
+            button: button,
+            container: card,
+            form: card?.querySelector('form'),
+            labels: labels,
+            onShow: () => helper.hide(),
+            onHide: onHide
         });
-        updateButton(false);
-        return setVisible;
+
+        return toggle.setVisible;
     }
 
     // Token management functions
-    function formatDate(dateString) {
-        if (!dateString) return 'Never';
-        const date = new Date(dateString);
-        return date.toLocaleString();
-    }
-
-    function copyToClipboard(text, button) {
-        navigator.clipboard.writeText(text).then(() => {
-            const originalHTML = button.innerHTML;
-            button.innerHTML = '<i class="fas fa-check"></i> Copied!';
-            button.classList.add('btn-success');
-            setTimeout(() => {
-                button.innerHTML = originalHTML;
-                button.classList.remove('btn-success');
-            }, 2000);
-        }).catch(err => {
-            console.error('Failed to copy:', err);
-            alert('Failed to copy token to clipboard');
-        });
-    }
 
     async function loadUserTokens(state, userEmail, helpers) {
         if (!state.userTokensList || !userEmail) {
@@ -942,7 +863,7 @@
         try {
             // Get all tokens (root users see all tokens)
             const response = await fetchJSON(apiUrl('/tokens'));
-            const allTokens = response.result || response || [];
+            const allTokens = normalizeApiResponse(response);
 
             // Filter tokens for the specific user
             const tokens = allTokens.filter(token => token.user_email === userEmail);
@@ -1138,7 +1059,7 @@
         if (state.tokenCopyBtn) {
             state.tokenCopyBtn.addEventListener('click', () => {
                 const token = state.tokenValueDisplay.textContent;
-                copyToClipboard(token, state.tokenCopyBtn);
+                copyToClipboard(token, state.tokenCopyBtn, { successText: '<i class="fas fa-check"></i> Copied!' });
             });
         }
     }

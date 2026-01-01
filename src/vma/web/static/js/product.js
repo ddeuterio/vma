@@ -8,8 +8,20 @@
         clearElement,
         fetchJSON,
         apiUrl,
-        setPageTitle
+        setPageTitle,
+        createMessageHelper,
+        normalizeApiResponse,
+        createFormToggle,
+        selectHelpers,
+        components
     } = utils;
+
+    const {
+        createToolbar,
+        createTableCard,
+        createFormCard,
+        createEmptyState
+    } = components;
 
     const { registerRoute, setActiveRoute } = router;
 
@@ -18,34 +30,6 @@
         return;
     }
 
-    function normaliseProducts(payload) {
-        if (!payload || typeof payload !== 'object') {
-            return [];
-        }
-
-        if (Array.isArray(payload)) {
-            return payload;
-        }
-
-        if ('result' in payload) {
-            return Array.isArray(payload.result) ? payload.result : [];
-        }
-
-        return [];
-    }
-
-    function normaliseTeams(payload) {
-        if (!payload || typeof payload !== 'object') {
-            return [];
-        }
-
-        const data = Array.isArray(payload.result) ? payload.result : payload;
-        if (Array.isArray(data)) {
-            return data;
-        }
-
-        return [];
-    }
 
     function findProductRecord(products, id) {
         if (!Array.isArray(products) || !id) {
@@ -68,25 +52,24 @@
 
         const wrapper = createElementWithAttrs('section', '', { class: 'products-page' });
 
-        const toolbar = createElementWithAttrs('div', '', { class: 'toolbar page-section' });
-        const toolbarTitle = createElementWithAttrs('h2', 'Products');
-        const toolbarActions = createElementWithAttrs('div', '', { class: 'toolbar-actions' });
-        const toggleFormButton = createElementWithAttrs('button', '', {
-            type: 'button',
-            class: 'btn primary',
-            'data-product-form-toggle': ''
+        const toolbar = createToolbar({
+            title: 'Products',
+            buttons: [
+                {
+                    label: 'Create Product',
+                    icon: 'fas fa-plus',
+                    className: 'btn primary',
+                    attributes: { 'data-product-form-toggle': '' }
+                },
+                {
+                    label: 'Delete Product',
+                    icon: 'fas fa-trash',
+                    className: 'btn danger',
+                    attributes: { 'data-product-delete-toggle': '' }
+                }
+            ]
         });
-        toggleFormButton.innerHTML = '<i class="fas fa-plus"></i> Create Product';
-        const toggleDeleteButton = createElementWithAttrs('button', '', {
-            type: 'button',
-            class: 'btn danger',
-            'data-product-delete-toggle': ''
-        });
-        toggleDeleteButton.innerHTML = '<i class="fas fa-trash"></i> Delete Product';
-        toolbarActions.appendChild(toggleFormButton);
-        toolbarActions.appendChild(toggleDeleteButton);
-        toolbar.appendChild(toolbarTitle);
-        toolbar.appendChild(toolbarActions);
+        const [toggleFormButton, toggleDeleteButton] = toolbar.buttons;
 
         const formCard = createElementWithAttrs('div', '', { class: 'form-card page-section hidden-form' });
         formCard.innerHTML = `
@@ -138,26 +121,13 @@
             <div class="inline-message" data-product-delete-feedback hidden></div>
         `;
 
-        const listCard = createElementWithAttrs('div', '', { class: 'table-card page-section' });
-        listCard.innerHTML = `
-            <div class="table-header">
-                <h2>Existing Products</h2>
-                <span class="badge" data-product-count>0</span>
-            </div>
-            <div class="inline-message" data-product-list-feedback hidden></div>
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Description</th>
-                        <th>Team</th>
-                    </tr>
-                </thead>
-                <tbody data-product-rows>
-                    <tr><td colspan="3" class="empty">Loading…</td></tr>
-                </tbody>
-            </table>
-        `;
+        const { element: listCard, tbody: rowsBody, counter, feedback: listFeedback } = createTableCard({
+            title: 'Existing Products',
+            columns: ['ID', 'Description', 'Team'],
+            dataAttribute: 'data-product-rows',
+            countAttribute: 'data-product-count',
+            feedbackAttribute: 'data-product-list-feedback'
+        });
 
         wrapper.appendChild(toolbar);
         wrapper.appendChild(formCard);
@@ -173,9 +143,9 @@
             listCard,
             form: formCard.querySelector('[data-product-form]'),
             feedback: formCard.querySelector('[data-product-feedback]'),
-            listFeedback: listCard.querySelector('[data-product-list-feedback]'),
-            rowsBody: listCard.querySelector('[data-product-rows]'),
-            counter: listCard.querySelector('[data-product-count]'),
+            listFeedback,
+            rowsBody,
+            counter,
             deleteForm: deleteCard.querySelector('[data-product-delete-form]'),
             deleteFeedback: deleteCard.querySelector('[data-product-delete-feedback]'),
             deleteSelect: deleteCard.querySelector('#product-delete-id'),
@@ -189,7 +159,11 @@
         }
 
         if (!Array.isArray(items) || !items.length) {
-            rowsBody.innerHTML = '<tr><td colspan="3" class="empty">No products yet.</td></tr>';
+            rowsBody.innerHTML = createEmptyState({
+                message: 'No products yet.',
+                colspan: 3,
+                context: 'table'
+            });
             counter.textContent = '0';
             return;
         }
@@ -214,45 +188,12 @@
             return;
         }
 
-        const select = state.teamSelect;
-        const options = Array.isArray(teams) ? teams : [];
-        const previous = select.value;
-
-        select.innerHTML = '';
-
-        if (!options.length) {
-            select.innerHTML = '<option value="">No teams available</option>';
-            select.disabled = true;
-            return;
-        }
-
-        const placeholder = document.createElement('option');
-        placeholder.value = '';
-        placeholder.textContent = 'Select a team…';
-        placeholder.disabled = true;
-        placeholder.selected = true;
-        select.appendChild(placeholder);
-
-        options.forEach(team => {
-            const value = team.name ?? team.id ?? team.value ?? team[0];
-            const label =
-                team.label
-                ?? team.name
-                ?? (team.description ? `${value}` : value);
-            if (!value) {
-                return;
-            }
-            const option = document.createElement('option');
-            option.value = value;
-            option.textContent = label;
-            select.appendChild(option);
+        selectHelpers.populate(state.teamSelect, teams, {
+            valueKey: item => item.name ?? item.id ?? item.value ?? item[0],
+            labelKey: item => item.label ?? item.name ?? item.id ?? item[0],
+            placeholder: 'Select a team…',
+            preserveValue: true
         });
-
-        if (options.some(team => (team.name ?? team.id ?? team[0]) === previous)) {
-            select.value = previous;
-        }
-
-        select.disabled = false;
     }
 
     async function loadTeams(state, helpers = {}) {
@@ -267,18 +208,18 @@
         if (isRoot) {
             try {
                 const response = await fetchJSON(apiUrl('/teams'));
-                const teams = normaliseTeams(response);
+                const teams = normalizeApiResponse(response);
                 state.teamsData = teams;
                 populateTeamOptions(state, teams);
                 if (!teams.length) {
-                    helpers.form?.showMessage('Create a team before adding products.', 'info');
+                    helpers.form?.show('Create a team before adding products.', 'info');
                 } else {
-                    helpers.form?.hideMessage();
+                    helpers.form?.hide();
                 }
             } catch (error) {
                 state.teamSelect.innerHTML = '<option value="">Unable to load teams</option>';
                 state.teamSelect.disabled = true;
-                helpers.form?.showMessage(error.message || 'Unable to load teams.', 'error');
+                helpers.form?.show(error.message || 'Unable to load teams.', 'error');
             }
             return;
         }
@@ -286,7 +227,7 @@
         const scopeTeams = auth.getWritableTeams?.() || [];
         if (!scopeTeams.length) {
             state.teamSelect.innerHTML = '<option value="">No writable teams available</option>';
-            helpers.form?.showMessage('Your account does not have write access to any team.', 'error');
+            helpers.form?.show('Your account does not have write access to any team.', 'error');
             return;
         }
 
@@ -297,7 +238,7 @@
         }));
         state.teamsData = mapped;
         populateTeamOptions(state, mapped);
-        helpers.form?.hideMessage();
+        helpers.form?.hide();
     }
 
     async function loadProducts(state, helpers = {}) {
@@ -306,19 +247,19 @@
         }
 
         state.rowsBody.innerHTML = '<tr><td colspan="3" class="empty">Loading…</td></tr>';
-        helpers.form?.hideMessage();
-        helpers.list?.hideMessage();
-        helpers.delete?.hideMessage();
+        helpers.form?.hide();
+        helpers.list?.hide();
+        helpers.delete?.hide();
 
         try {
             const payload = await fetchJSON(apiUrl('/products'));
-            const products = normaliseProducts(payload);
+            const products = normalizeApiResponse(payload);
             renderRows(state.rowsBody, state.counter, products);
             state.productsData = products;
             updateDeleteOptions(state);
         } catch (error) {
             renderRows(state.rowsBody, state.counter, []);
-            helpers.list?.showMessage(error.message || 'Unable to load products.', 'error');
+            helpers.list?.show(error.message || 'Unable to load products.', 'error');
         }
     }
 
@@ -329,7 +270,7 @@
 
         state.form.addEventListener('submit', async event => {
             event.preventDefault();
-            helpers.form?.hideMessage();
+            helpers.form?.hide();
 
             const formData = new FormData(state.form);
             const payload = {
@@ -339,11 +280,11 @@
             };
 
             if (!payload.name) {
-                helpers.form?.showMessage('Product ID is required.', 'error');
+                helpers.form?.show('Product ID is required.', 'error');
                 return;
             }
             if (!payload.team) {
-                helpers.form?.showMessage('A team must be selected.', 'error');
+                helpers.form?.show('A team must be selected.', 'error');
                 return;
             }
 
@@ -359,14 +300,14 @@
 
                 state.setFormVisible?.(false);
                 await loadProducts(state, helpers);
-                helpers.form?.showMessage('Product created successfully.', 'success');
+                helpers.form?.show('Product created successfully.', 'success');
             } catch (error) {
-                helpers.form?.showMessage(error.message || 'Failed to create product.', 'error');
+                helpers.form?.show(error.message || 'Failed to create product.', 'error');
             }
         });
 
         state.form.addEventListener('reset', () => {
-            helpers.form?.hideMessage();
+            helpers.form?.hide();
         });
     }
 
@@ -418,18 +359,18 @@
 
         state.deleteForm.addEventListener('submit', async event => {
             event.preventDefault();
-            helpers.delete?.hideMessage();
+            helpers.delete?.hide();
 
             const productId = state.deleteSelect?.value?.trim();
             if (!productId) {
-                helpers.delete?.showMessage('Select a product to delete.', 'error');
+                helpers.delete?.show('Select a product to delete.', 'error');
                 return;
             }
 
             const productRecord = findProductRecord(state.productsData, productId);
             const team = productRecord?.team ?? productRecord?.team_id ?? null;
             if (!team) {
-                helpers.delete?.showMessage('Unable to determine the team for this product.', 'error');
+                helpers.delete?.show('Unable to determine the team for this product.', 'error');
                 return;
             }
 
@@ -444,108 +385,48 @@
                     method: 'DELETE'
                 });
                 await loadProducts(state, helpers);
-                helpers.delete?.showMessage(`Product "${productId}" deleted successfully.`, 'success');
+                helpers.delete?.show(`Product "${productId}" deleted successfully.`, 'success');
                 resetDeleteForm(state);
             } catch (error) {
-                helpers.delete?.showMessage(error.message || 'Failed to delete product.', 'error');
+                helpers.delete?.show(error.message || 'Failed to delete product.', 'error');
             }
         });
 
         state.deleteForm.addEventListener('reset', () => {
-            helpers.delete?.hideMessage();
+            helpers.delete?.hide();
             resetDeleteForm(state);
         });
     }
 
     function setupFormToggle(state, helpers) {
-        const { toggleFormButton, formCard, form } = state;
-        if (!toggleFormButton || !formCard) {
-            return;
-        }
-
-        const firstField = form?.querySelector('input, textarea, select');
-
-        const updateButtonLabel = visible => {
-            toggleFormButton.innerHTML = visible
-                ? '<i class="fas fa-times"></i> Cancel'
-                : '<i class="fas fa-plus"></i> Create Product';
-            toggleFormButton.setAttribute('aria-expanded', String(visible));
-        };
-
-        const setFormVisible = visible => {
-            formCard.classList.toggle('show', visible);
-            updateButtonLabel(visible);
-            if (visible) {
-                helpers.form?.hideMessage();
-                firstField?.focus();
-            } else {
-                form?.reset();
-            }
-        };
-
-        toggleFormButton.addEventListener('click', () => {
-            const shouldShow = !formCard.classList.contains('show');
-            setFormVisible(shouldShow);
+        const toggle = createFormToggle({
+            button: state.toggleFormButton,
+            container: state.formCard,
+            form: state.form,
+            labels: {
+                open: '<i class="fas fa-plus"></i> Create Product',
+                close: '<i class="fas fa-times"></i> Cancel'
+            },
+            onShow: () => helpers.form?.hide()
         });
 
-        updateButtonLabel(false);
-        state.setFormVisible = setFormVisible;
-    }
-
-    function createMessageHelpers(feedbackElement) {
-        const showMessage = (message, type = 'info') => {
-            if (!feedbackElement) {
-                return;
-            }
-            feedbackElement.textContent = message;
-            feedbackElement.className = `inline-message inline-message--${type}`;
-            feedbackElement.hidden = false;
-        };
-
-        const hideMessage = () => {
-            if (!feedbackElement) {
-                return;
-            }
-            feedbackElement.hidden = true;
-            feedbackElement.textContent = '';
-        };
-
-        return { showMessage, hideMessage };
+        state.setFormVisible = toggle.setVisible;
     }
 
     function setupDeleteToggle(state, helpers) {
-        const { toggleDeleteButton, deleteCard, deleteForm } = state;
-        if (!toggleDeleteButton || !deleteCard) {
-            return;
-        }
-
-        const firstField = deleteForm?.querySelector('select');
-
-        const updateButtonLabel = visible => {
-            toggleDeleteButton.innerHTML = visible
-                ? '<i class="fas fa-times"></i> Cancel Delete'
-                : '<i class="fas fa-trash"></i> Delete Product';
-            toggleDeleteButton.setAttribute('aria-expanded', String(visible));
-        };
-
-        const setDeleteVisible = visible => {
-            deleteCard.classList.toggle('show', visible);
-            updateButtonLabel(visible);
-            if (visible) {
-                helpers.delete?.hideMessage();
-                firstField?.focus();
-            } else {
-                resetDeleteForm(state);
-            }
-        };
-
-        toggleDeleteButton.addEventListener('click', () => {
-            const shouldShow = !deleteCard.classList.contains('show');
-            setDeleteVisible(shouldShow);
+        const toggle = createFormToggle({
+            button: state.toggleDeleteButton,
+            container: state.deleteCard,
+            form: state.deleteForm,
+            labels: {
+                open: '<i class="fas fa-trash"></i> Delete Product',
+                close: '<i class="fas fa-times"></i> Cancel Delete'
+            },
+            onShow: () => helpers.delete?.hide(),
+            onHide: () => resetDeleteForm(state)
         });
 
-        updateButtonLabel(false);
-        state.setDeleteVisible = setDeleteVisible;
+        state.setDeleteVisible = toggle.setVisible;
     }
 
     registerRoute('products', () => {
@@ -555,9 +436,9 @@
         }
 
         const helpers = {
-            form: createMessageHelpers(state.feedback),
-            list: createMessageHelpers(state.listFeedback),
-            delete: createMessageHelpers(state.deleteFeedback)
+            form: createMessageHelper(state.feedback, { closeButton: false }),
+            list: createMessageHelper(state.listFeedback, { closeButton: false }),
+            delete: createMessageHelper(state.deleteFeedback, { closeButton: false })
         };
 
         loadTeams(state, helpers);

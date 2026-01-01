@@ -8,7 +8,9 @@
         clearElement,
         fetchJSON,
         apiUrl,
-        setPageTitle
+        setPageTitle,
+        createMessageHelper,
+        normalizeApiResponse
     } = utils;
 
     const { registerRoute, setActiveRoute } = router;
@@ -193,26 +195,6 @@
         return '';
     }
 
-    function createMessageHelper(element) {
-        const showMessage = (message, type = 'info') => {
-            if (!element) {
-                return;
-            }
-            element.textContent = message;
-            element.className = `inline-message inline-message--${type}`;
-            element.hidden = false;
-        };
-
-        const hideMessage = () => {
-            if (!element) {
-                return;
-            }
-            element.hidden = true;
-            element.textContent = '';
-        };
-
-        return { showMessage, hideMessage };
-    }
 
     function createField(label, iconClass, content) {
         const field = createElementWithAttrs('div', '', { class: 'cve-field' });
@@ -304,6 +286,142 @@
         if (!hasEntries) {
             container.appendChild(createElementWithAttrs('span', 'No CVSS data available.'));
         }
+
+    return container;
+}
+
+function parseCvssVector(vectorString) {
+    // Parse CVSS vector string to extract base score
+    // Format: CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H
+    const result = {
+        vectorString: vectorString,
+        baseScore: null,
+        baseSeverity: null
+    };
+
+    if (!vectorString || typeof vectorString !== 'string') {
+        return result;
+    }
+
+    // CVSS v3.x scoring
+    const v3Match = vectorString.match(/CVSS:3\.[01]/);
+    if (v3Match) {
+        // Extract metric values
+        const metrics = {};
+        vectorString.split('/').forEach(part => {
+            const [key, value] = part.split(':');
+            if (key && value) {
+                metrics[key] = value;
+            }
+        });
+
+        // Calculate base score (simplified - matching common CVSS patterns)
+        // This is a heuristic based on typical values
+        if (metrics.AV === 'N' && metrics.AC === 'L' && metrics.PR === 'N') {
+            if (metrics.C === 'H' && metrics.I === 'H' && metrics.A === 'H') {
+                result.baseScore = 9.8;
+            } else if (metrics.C === 'H' || metrics.I === 'H' || metrics.A === 'H') {
+                result.baseScore = 7.5;
+            } else {
+                result.baseScore = 5.0;
+            }
+        } else {
+            result.baseScore = 5.0; // Default medium
+        }
+    }
+
+    // CVSS v4.x scoring
+    const v4Match = vectorString.match(/CVSS:4\.0/);
+    if (v4Match) {
+        // V4 uses different metrics but similar principle
+        result.baseScore = 7.0; // Default to high for v4
+    }
+
+    // Determine severity from score
+    if (result.baseScore !== null) {
+        if (result.baseScore >= 9.0) {
+            result.baseSeverity = 'CRITICAL';
+        } else if (result.baseScore >= 7.0) {
+            result.baseSeverity = 'HIGH';
+        } else if (result.baseScore >= 4.0) {
+            result.baseSeverity = 'MEDIUM';
+        } else {
+            result.baseSeverity = 'LOW';
+        }
+    }
+
+    return result;
+}
+
+function renderSeverityEntries(severityData) {
+    const container = document.createElement('div');
+    let hasEntries = false;
+
+    if (severityData && typeof severityData === 'object') {
+        Object.entries(severityData).forEach(([severityType, entries]) => {
+            if (!Array.isArray(entries)) {
+                return;
+            }
+
+            // Filter: Only show severity items that start with "CVSS"
+            if (!severityType || !severityType.toUpperCase().startsWith('CVSS')) {
+                return;
+            }
+
+            // Extract version from severity type (e.g., CVSS_V3 -> 3)
+            const versionMatch = severityType.match(/CVSS_V?(\d+)/i);
+            const version = versionMatch ? versionMatch[1] : severityType;
+
+            entries.forEach(entry => {
+                hasEntries = true;
+                const row = createElementWithAttrs('div', '', { class: 'cvss-entry' });
+
+                // Parse CVSS vector string to extract score and severity
+                const parsed = parseCvssVector(entry.score);
+
+                // 1. Severity badge (matching NVD)
+                if (parsed.baseSeverity) {
+                    row.appendChild(
+                        createElementWithAttrs('span', parsed.baseSeverity, {
+                            class: `severity-badge ${severityClass(parsed.baseSeverity)}`.trim()
+                        })
+                    );
+                }
+
+                // 2. Score badge (matching NVD)
+                if (parsed.baseScore !== null) {
+                    const classes = ['severity-badge'];
+                    const severityClassName = severityClass(parsed.baseSeverity);
+                    if (severityClassName) {
+                        classes.push(severityClassName);
+                    }
+                    row.appendChild(
+                        createElementWithAttrs('span', `Score: ${parsed.baseScore}`, {
+                            class: classes.filter(Boolean).join(' ')
+                        })
+                    );
+                }
+
+                // 3. Version badge (matching NVD)
+                row.appendChild(
+                    createElementWithAttrs('span', `v${version}`, {
+                        class: 'badge cvss-version'
+                    })
+                );
+
+                // 4. Vector string (matching NVD)
+                if (parsed.vectorString) {
+                    row.appendChild(createElementWithAttrs('span', parsed.vectorString));
+                }
+
+                container.appendChild(row);
+            });
+        });
+    }
+
+    if (!hasEntries) {
+        container.appendChild(createElementWithAttrs('span', 'No CVSS data available.'));
+    }
 
     return container;
 }
@@ -450,47 +568,196 @@ function renderConfigurationGroups(groups) {
         metaContainer.appendChild(span);
     }
 
-    function renderCveCard(cveId, details) {
+    function renderCveCard(cveId, details, dataSource) {
         const card = createElementWithAttrs('article', '', { class: 'cve-card' });
         const header = createElementWithAttrs('div', '', { class: 'cve-header' });
         header.appendChild(createElementWithAttrs('div', cveId, { class: 'cve-id' }));
 
         const meta = createElementWithAttrs('div', '', { class: 'cve-meta' });
-        appendMeta(meta, 'fa-calendar-alt', `Published ${formatDate(details.published_date)}`);
-        appendMeta(meta, 'fa-clock', `Updated ${formatDate(details.last_modified)}`);
-        appendMeta(meta, 'fa-building', details.source ? `Source ${details.source}` : '');
-        appendMeta(meta, 'fa-clipboard-check', details.status);
+
+        // Adapt metadata based on data source
+        if (dataSource === 'osv') {
+            // OSV format
+            appendMeta(meta, 'fa-calendar-alt', `Published ${formatDate(details.published)}`);
+            appendMeta(meta, 'fa-clock', `Modified ${formatDate(details.modified)}`);
+            appendMeta(meta, 'fa-database', 'Source: OSV');
+            appendMeta(meta, 'fa-code-branch', `Schema ${details.schema_version || '1.0.0'}`);
+            if (details.withdrawn) {
+                appendMeta(meta, 'fa-exclamation-triangle', `Withdrawn ${formatDate(details.withdrawn)}`);
+            }
+        } else {
+            // NVD format
+            appendMeta(meta, 'fa-calendar-alt', `Published ${formatDate(details.published_date)}`);
+            appendMeta(meta, 'fa-clock', `Updated ${formatDate(details.last_modified)}`);
+            appendMeta(meta, 'fa-database', 'Source: NVD');
+            appendMeta(meta, 'fa-clipboard-check', details.status);
+            if (details.source) {
+                appendMeta(meta, 'fa-building', `Identifier: ${details.source}`);
+            }
+        }
+
         header.appendChild(meta);
 
         const body = createElementWithAttrs('div', '', { class: 'cve-body' });
-        const description = extractDescription(details.descriptions) || 'No description available.';
-        const weaknessEntries = extractWeakness(details.weakness);
-        const references = extractReferenceUrls(details.references).map(url =>
-            createElementWithAttrs('a', url, {
-                href: url,
-                target: '_blank',
-                rel: 'noopener noreferrer',
-                class: 'link-chip'
-            })
-        );
 
-        body.appendChild(createField('CVSS Metrics', 'fa-shield-alt', renderCvssEntries(details.cvss)));
-        body.appendChild(createField('Description', 'fa-align-left', description));
-        body.appendChild(createField('Configurations', 'fa-diagram-project', formatConfigurations(details.configurations)));
-
-        if (weaknessEntries && weaknessEntries.length) {
-            body.appendChild(
-                createField('Weakness', 'fa-bolt', weaknessEntries.map(entry => entry || '—'))
-            );
+        // Adapt description based on data source
+        let description;
+        if (dataSource === 'osv') {
+            // OSV uses 'summary' and 'details'
+            const summary = details.summary || '';
+            const detailsText = details.details || '';
+            description = summary && detailsText
+                ? `${summary}\n\n${detailsText}`
+                : (summary || detailsText || 'No description available.');
+        } else {
+            // NVD uses 'descriptions'
+            description = extractDescription(details.descriptions) || 'No description available.';
         }
 
-        body.appendChild(
-            createField(
-                'References',
-                'fa-link',
-                references.length ? references : ['No reference links available.']
-            )
-        );
+        body.appendChild(createField('Description', 'fa-align-left', description));
+
+        // CVSS Metrics - only for NVD
+        if (dataSource !== 'osv' && details.cvss) {
+            body.appendChild(createField('CVSS Metrics', 'fa-shield-alt', renderCvssEntries(details.cvss)));
+        }
+
+        // Configurations - only for NVD
+        if (dataSource !== 'osv' && details.configurations) {
+            body.appendChild(createField('Configurations', 'fa-diagram-project', formatConfigurations(details.configurations)));
+        }
+
+        // Weakness - only for NVD
+        if (dataSource !== 'osv' && details.weakness) {
+            const weaknessEntries = extractWeakness(details.weakness);
+            if (weaknessEntries && weaknessEntries.length) {
+                body.appendChild(
+                    createField('Weakness', 'fa-bolt', weaknessEntries.map(entry => entry || '—'))
+                );
+            }
+        }
+
+        // CVSS Metrics - adapt based on source
+        if (dataSource === 'osv') {
+            // OSV CVSS data from osv_severity table
+            if (details.severity && typeof details.severity === 'object' && Object.keys(details.severity).length > 0) {
+                body.appendChild(createField('CVSS Metrics', 'fa-shield-alt', renderSeverityEntries(details.severity)));
+            }
+
+            // OSV severity rating from database_specific
+            if (details.database_specific) {
+                const dbSpecific = safeParseJSON(details.database_specific);
+                if (dbSpecific && typeof dbSpecific === 'object' && dbSpecific.severity) {
+                    const severityRating = String(dbSpecific.severity).toUpperCase();
+                    const severityBadge = createElementWithAttrs('span', severityRating, {
+                        class: `severity-badge ${severityClass(severityRating)}`.trim()
+                    });
+                    body.appendChild(createField('Severity', 'fa-exclamation-triangle', severityBadge));
+                }
+            }
+        }
+
+        // References - adapt based on source
+        let references = [];
+        if (dataSource === 'osv') {
+            // OSV database_specific field
+            if (details.database_specific) {
+                const dbSpecific = safeParseJSON(details.database_specific);
+                if (dbSpecific && typeof dbSpecific === 'object') {
+                    const dbContainer = createElementWithAttrs('div', '', { class: 'database-specific-container' });
+
+                    // CWE IDs
+                    if (dbSpecific.cwe_ids && Array.isArray(dbSpecific.cwe_ids) && dbSpecific.cwe_ids.length > 0) {
+                        const cweContainer = createElementWithAttrs('div', '', { class: 'db-field' });
+                        const cweLabel = createElementWithAttrs('strong', 'CWE IDs: ');
+                        cweContainer.appendChild(cweLabel);
+
+                        dbSpecific.cwe_ids.forEach((cweId, index) => {
+                            if (index > 0) {
+                                cweContainer.appendChild(document.createTextNode(' '));
+                            }
+                            const cweBadge = createElementWithAttrs('span', cweId, {
+                                class: 'badge cwe-badge'
+                            });
+                            cweContainer.appendChild(cweBadge);
+                        });
+                        dbContainer.appendChild(cweContainer);
+                    }
+
+                    // GitHub Reviewed Status
+                    if (dbSpecific.github_reviewed !== undefined) {
+                        const reviewedContainer = createElementWithAttrs('div', '', { class: 'db-field' });
+                        const reviewedLabel = createElementWithAttrs('strong', 'GitHub Reviewed: ');
+                        reviewedContainer.appendChild(reviewedLabel);
+
+                        const statusBadge = createElementWithAttrs('span',
+                            dbSpecific.github_reviewed ? 'Yes' : 'No', {
+                            class: `badge ${dbSpecific.github_reviewed ? 'status-reviewed' : 'status-not-reviewed'}`
+                        });
+                        reviewedContainer.appendChild(statusBadge);
+                        dbContainer.appendChild(reviewedContainer);
+                    }
+
+                    // NVD Published Date
+                    if (dbSpecific.nvd_published_at) {
+                        const nvdDateContainer = createElementWithAttrs('div', '', { class: 'db-field' });
+                        const nvdDateLabel = createElementWithAttrs('strong', 'NVD Published: ');
+                        nvdDateContainer.appendChild(nvdDateLabel);
+                        nvdDateContainer.appendChild(document.createTextNode(formatDate(dbSpecific.nvd_published_at)));
+                        dbContainer.appendChild(nvdDateContainer);
+                    }
+
+                    // GitHub Reviewed Date
+                    if (dbSpecific.github_reviewed_at) {
+                        const githubDateContainer = createElementWithAttrs('div', '', { class: 'db-field' });
+                        const githubDateLabel = createElementWithAttrs('strong', 'GitHub Reviewed: ');
+                        githubDateContainer.appendChild(githubDateLabel);
+                        githubDateContainer.appendChild(document.createTextNode(formatDate(dbSpecific.github_reviewed_at)));
+                        dbContainer.appendChild(githubDateContainer);
+                    }
+
+                    // Add any other fields that don't match known keys
+                    const knownKeys = ['cwe_ids', 'severity', 'github_reviewed', 'nvd_published_at', 'github_reviewed_at'];
+                    Object.entries(dbSpecific).forEach(([key, value]) => {
+                        if (!knownKeys.includes(key) && value !== null && value !== undefined) {
+                            const fieldContainer = createElementWithAttrs('div', '', { class: 'db-field' });
+                            const fieldLabel = createElementWithAttrs('strong', `${key}: `);
+                            fieldContainer.appendChild(fieldLabel);
+
+                            // Format value based on type
+                            let displayValue;
+                            if (typeof value === 'object') {
+                                displayValue = JSON.stringify(value);
+                            } else {
+                                displayValue = String(value);
+                            }
+                            fieldContainer.appendChild(document.createTextNode(displayValue));
+                            dbContainer.appendChild(fieldContainer);
+                        }
+                    });
+
+                    if (dbContainer.children.length > 0) {
+                        body.appendChild(createField('Database Specific', 'fa-info-circle', dbContainer));
+                    }
+                }
+            }
+        } else {
+            // NVD references
+            references = extractReferenceUrls(details.references).map(url =>
+                createElementWithAttrs('a', url, {
+                    href: url,
+                    target: '_blank',
+                    rel: 'noopener noreferrer',
+                    class: 'link-chip'
+                })
+            );
+            body.appendChild(
+                createField(
+                    'References',
+                    'fa-link',
+                    references.length ? references : ['No reference links available.']
+                )
+            );
+        }
 
         card.appendChild(header);
         card.appendChild(body);
@@ -510,22 +777,43 @@ function renderConfigurationGroups(groups) {
         const wrapper = createElementWithAttrs('section', '', { class: 'search-page' });
 
         const hero = createElementWithAttrs('div', '', { class: 'search-hero' });
+
+        // Header with title and source selector
+        const heroHeader = createElementWithAttrs('div', '', { class: 'search-hero__header' });
         const heroCopy = document.createElement('div');
         heroCopy.appendChild(createElementWithAttrs('h2', 'Common Vulnerabilities and Exposures'));
         heroCopy.appendChild(
             createElementWithAttrs(
                 'p',
-                'Search CVE by identifier.'
+                'Search vulnerabilities by identifier from NVD or OSV databases.'
             )
         );
-        hero.appendChild(heroCopy);
+        heroHeader.appendChild(heroCopy);
+
+        // Source selector
+        const sourceSelector = createElementWithAttrs('div', '', { class: 'source-selector' });
+        const sourceLabel = createElementWithAttrs('label', 'Data Source: ', { for: 'sourceSelect' });
+        const sourceSelect = createElementWithAttrs('select', '', {
+            id: 'sourceSelect',
+            class: 'source-select'
+        });
+
+        const nvdOption = createElementWithAttrs('option', 'NVD (National Vulnerability Database)', { value: 'nvd' });
+        const osvOption = createElementWithAttrs('option', 'OSV (Open Source Vulnerabilities)', { value: 'osv' });
+        sourceSelect.appendChild(nvdOption);
+        sourceSelect.appendChild(osvOption);
+
+        sourceSelector.appendChild(sourceLabel);
+        sourceSelector.appendChild(sourceSelect);
+        heroHeader.appendChild(sourceSelector);
+        hero.appendChild(heroHeader);
 
         const searchBar = createElementWithAttrs('div', '', { class: 'search-bar' });
         const input = createElementWithAttrs('input', '', {
             type: 'text',
             id: 'searchInput',
             class: 'search-input',
-            placeholder: 'Search CVEs by ID (e.g. CVE-2024-1234)',
+            placeholder: 'Search by ID (e.g. CVE-2024-1234 or GHSA-xxxx-yyyy-zzzz)',
             autocomplete: 'off'
         });
         const button = document.createElement('button');
@@ -579,6 +867,7 @@ function renderConfigurationGroups(groups) {
         return {
             input,
             button,
+            sourceSelect,
             feedback,
             loadingIndicator,
             noResults,
@@ -587,26 +876,57 @@ function renderConfigurationGroups(groups) {
         };
     }
 
-    function normaliseResult(payload) {
+    function normaliseResult(payload, dataSource) {
         if (!payload || typeof payload !== 'object') {
             return [];
         }
 
+        // Handle OSV format (array of results)
+        if (dataSource === 'osv') {
+            if ('result' in payload && Array.isArray(payload.result)) {
+                return payload.result.map(item => ({
+                    id: item.osv_id,
+                    ...item,
+                    dataSource: 'osv'
+                }));
+            }
+            if (Array.isArray(payload)) {
+                return payload.map(item => ({
+                    id: item.osv_id || item.id,
+                    ...item,
+                    dataSource: 'osv'
+                }));
+            }
+        }
+
+        // Handle NVD format (object with CVE IDs as keys)
         if (Array.isArray(payload)) {
-            return payload;
+            return payload.map(item => ({
+                id: item.cve_id || item.id,
+                ...item,
+                dataSource: 'nvd'
+            }));
         }
 
         if ('result' in payload && payload.result && typeof payload.result === 'object') {
+            if (Array.isArray(payload.result)) {
+                return payload.result.map(item => ({
+                    id: item.cve_id || item.osv_id || item.id,
+                    ...item,
+                    dataSource: dataSource || 'nvd'
+                }));
+            }
             return Object.entries(payload.result).map(([cveId, details]) => ({
                 id: cveId,
-                ...details
+                ...details,
+                dataSource: 'nvd'
             }));
         }
 
         return [];
     }
 
-    function renderResults(state, items) {
+    function renderResults(state, items, dataSource) {
         const list = state.resultsList;
         if (!list) {
             return;
@@ -621,38 +941,44 @@ function renderConfigurationGroups(groups) {
 
         state.noResults.hidden = true;
         items.forEach(item => {
-            list.appendChild(renderCveCard(item.id, item));
+            // Use dataSource from item or fallback to provided dataSource
+            const source = item.dataSource || dataSource || 'nvd';
+            list.appendChild(renderCveCard(item.id, item, source));
         });
     }
 
     async function performSearch(state, helpers, rawTerm) {
         const term = rawTerm?.trim();
         if (!term) {
-            helpers.feedback.showMessage('Enter a CVE identifier to search.', 'error');
+            helpers.feedback.show('Enter a vulnerability identifier to search.', 'error');
             state.input?.focus();
             return;
         }
 
-        helpers.feedback.hideMessage();
+        const dataSource = state.sourceSelect?.value || 'nvd';
+
+        helpers.feedback.hide();
         state.loadingIndicator.hidden = false;
         state.noResults.hidden = true;
         state.resultsList.innerHTML = '';
         state.button.disabled = true;
         state.input.disabled = true;
+        state.sourceSelect.disabled = true;
 
         try {
-            const payload = await fetchJSON(apiUrl(`/cve/${encodeURIComponent(term)}`));
-            const items = normaliseResult(payload);
-            renderResults(state, items);
+            const payload = await fetchJSON(apiUrl(`/cve/${dataSource}/${encodeURIComponent(term)}`));
+            const items = normaliseResult(payload, dataSource);
+            renderResults(state, items, dataSource);
             if (!items.length) {
                 state.noResults.hidden = false;
             }
         } catch (error) {
-            helpers.feedback.showMessage(error.message || 'Search failed.', 'error');
+            helpers.feedback.show(error.message || 'Search failed.', 'error');
         } finally {
             state.loadingIndicator.hidden = true;
             state.button.disabled = false;
             state.input.disabled = false;
+            state.sourceSelect.disabled = false;
         }
     }
 

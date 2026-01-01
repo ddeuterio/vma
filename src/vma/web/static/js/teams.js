@@ -8,8 +8,19 @@
         clearElement,
         fetchJSON,
         apiUrl,
-        setPageTitle
+        setPageTitle,
+        createMessageHelper,
+        normalizeApiResponse,
+        createFormToggle,
+        selectHelpers,
+        components
     } = utils;
+
+    const {
+        createToolbar,
+        createTableCard,
+        createEmptyState
+    } = components;
 
     const { registerRoute, setActiveRoute } = router;
 
@@ -20,25 +31,6 @@
 
     const ensureRoot = () => Boolean(auth.isRoot?.());
 
-    function createMessageHelper(element) {
-        return {
-            show(message, type = 'info') {
-                if (!element) {
-                    return;
-                }
-                element.textContent = message;
-                element.className = `inline-message inline-message--${type}`;
-                element.hidden = false;
-            },
-            hide() {
-                if (!element) {
-                    return;
-                }
-                element.hidden = true;
-                element.textContent = '';
-            }
-        };
-    }
 
     function renderRestrictedView() {
         const root = document.getElementById('vmaContent');
@@ -68,27 +60,24 @@
 
         const wrapper = createElementWithAttrs('section', '', { class: 'teams-page' });
 
-        const toolbar = createElementWithAttrs('div', '', { class: 'toolbar page-section' });
-        toolbar.appendChild(createElementWithAttrs('h2', 'Teams'));
-        const toolbarActions = createElementWithAttrs('div', '', { class: 'toolbar-actions' });
-
-        const createToggle = createElementWithAttrs('button', '', {
-            type: 'button',
-            class: 'btn primary',
-            'data-team-create-toggle': ''
+        const toolbar = createToolbar({
+            title: 'Teams',
+            buttons: [
+                {
+                    label: 'Create Team',
+                    icon: 'fas fa-plus',
+                    className: 'btn primary',
+                    attributes: { 'data-team-create-toggle': '' }
+                },
+                {
+                    label: 'Delete Team',
+                    icon: 'fas fa-trash',
+                    className: 'btn danger',
+                    attributes: { 'data-team-delete-toggle': '' }
+                }
+            ]
         });
-        createToggle.innerHTML = '<i class="fas fa-plus"></i> Create Team';
-
-        const deleteToggle = createElementWithAttrs('button', '', {
-            type: 'button',
-            class: 'btn danger',
-            'data-team-delete-toggle': ''
-        });
-        deleteToggle.innerHTML = '<i class="fas fa-trash"></i> Delete Team';
-
-        toolbarActions.appendChild(createToggle);
-        toolbarActions.appendChild(deleteToggle);
-        toolbar.appendChild(toolbarActions);
+        const [createToggle, deleteToggle] = toolbar.buttons;
 
         const createCard = createElementWithAttrs('div', '', { class: 'form-card page-section hidden-form' });
         createCard.innerHTML = `
@@ -134,25 +123,13 @@
             <div class="inline-message" data-team-delete-feedback hidden></div>
         `;
 
-        const listCard = createElementWithAttrs('div', '', { class: 'table-card page-section' });
-        listCard.innerHTML = `
-            <div class="table-header">
-                <h2>Existing Teams</h2>
-                <span class="badge" data-team-count>0</span>
-            </div>
-            <div class="inline-message" data-team-list-feedback hidden></div>
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Description</th>
-                    </tr>
-                </thead>
-                <tbody data-team-rows>
-                    <tr><td colspan="2" class="empty">Loading…</td></tr>
-                </tbody>
-            </table>
-        `;
+        const { element: listCard, tbody: rowsBody, counter, feedback: listFeedback } = createTableCard({
+            title: 'Existing Teams',
+            columns: ['Name', 'Description'],
+            dataAttribute: 'data-team-rows',
+            countAttribute: 'data-team-count',
+            feedbackAttribute: 'data-team-list-feedback'
+        });
 
         wrapper.appendChild(toolbar);
         wrapper.appendChild(createCard);
@@ -171,9 +148,9 @@
             deleteForm: deleteCard.querySelector('[data-team-delete-form]'),
             deleteFeedback: deleteCard.querySelector('[data-team-delete-feedback]'),
             deleteSelect: deleteCard.querySelector('#team-delete-select'),
-            listFeedback: listCard.querySelector('[data-team-list-feedback]'),
-            rowsBody: listCard.querySelector('[data-team-rows]'),
-            counter: listCard.querySelector('[data-team-count]'),
+            listFeedback,
+            rowsBody,
+            counter,
             teams: []
         };
     }
@@ -184,7 +161,11 @@
         }
         const data = Array.isArray(state.teams) ? state.teams : [];
         if (!data.length) {
-            state.rowsBody.innerHTML = '<tr><td colspan="2" class="empty">No teams yet.</td></tr>';
+            state.rowsBody.innerHTML = createEmptyState({
+                message: 'No teams yet.',
+                colspan: 2,
+                context: 'table'
+            });
             state.counter.textContent = '0';
             return;
         }
@@ -204,22 +185,12 @@
         if (!state.deleteSelect) {
             return;
         }
-        const data = Array.isArray(state.teams) ? state.teams : [];
-        const previous = state.deleteSelect.value;
-        state.deleteSelect.innerHTML = '<option value="">Select a team…</option>';
-        data.forEach(team => {
-            const value = team.name ?? team.id ?? team[0];
-            if (!value) {
-                return;
-            }
-            state.deleteSelect.appendChild(createElementWithAttrs('option', value, { value }));
+        selectHelpers.populate(state.deleteSelect, state.teams, {
+            valueKey: item => item.name ?? item.id ?? item[0],
+            labelKey: item => item.name ?? item.id ?? item[0],
+            placeholder: 'Select a team…',
+            preserveValue: true
         });
-        state.deleteSelect.disabled = !data.length;
-        if (data.some(team => (team.name ?? team.id ?? team[0]) === previous)) {
-            state.deleteSelect.value = previous;
-        } else {
-            state.deleteSelect.value = '';
-        }
     }
 
     async function loadTeams(state, helpers) {
@@ -232,7 +203,7 @@
         helpers.delete.hide();
         try {
             const payload = await fetchJSON(apiUrl('/teams'));
-            state.teams = Array.isArray(payload?.result) ? payload.result : payload || [];
+            state.teams = normalizeApiResponse(payload);
             renderRows(state);
             updateDeleteOptions(state);
         } catch (error) {
@@ -309,36 +280,19 @@
     }
 
     function setupFormToggle(button, card, helpers, options = {}) {
-        if (!button || !card) {
-            return () => {};
-        }
-        const form = card.querySelector('form');
-        const firstField = form?.querySelector('input, textarea, select');
         const { openLabel, closeLabel } = options;
-
-        const updateButton = visible => {
-            button.innerHTML = visible ? closeLabel : openLabel;
-            button.setAttribute('aria-expanded', String(visible));
-        };
-
-        const setVisible = visible => {
-            card.classList.toggle('show', visible);
-            updateButton(visible);
-            if (visible) {
-                helpers.hide();
-                firstField?.focus();
-            } else {
-                form?.reset();
-            }
-        };
-
-        button.addEventListener('click', () => {
-            const next = !card.classList.contains('show');
-            setVisible(next);
+        const toggle = createFormToggle({
+            button: button,
+            container: card,
+            form: card?.querySelector('form'),
+            labels: {
+                open: openLabel,
+                close: closeLabel
+            },
+            onShow: () => helpers.hide()
         });
 
-        updateButton(false);
-        return setVisible;
+        return toggle.setVisible;
     }
 
     registerRoute('teams', () => {

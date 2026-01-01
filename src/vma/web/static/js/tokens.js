@@ -8,8 +8,17 @@
         clearElement,
         fetchJSON,
         apiUrl,
-        setPageTitle
+        setPageTitle,
+        createMessageHelper,
+        formatDate,
+        copyToClipboard,
+        components
     } = utils;
+
+    const {
+        createToolbar,
+        createEmptyState
+    } = components;
 
     const { registerRoute, setActiveRoute } = router;
 
@@ -18,31 +27,6 @@
         return;
     }
 
-    function createMessageHelper(element) {
-        return {
-            show(message, type = 'info') {
-                if (!element) {
-                    return;
-                }
-                element.textContent = message;
-                element.className = `inline-message inline-message--${type}`;
-                element.hidden = false;
-            },
-            hide() {
-                if (!element) {
-                    return;
-                }
-                element.hidden = true;
-                element.textContent = '';
-            }
-        };
-    }
-
-    function formatDate(dateString) {
-        if (!dateString) return 'Never';
-        const date = new Date(dateString);
-        return date.toLocaleString();
-    }
 
     function renderProfileView() {
         const root = document.getElementById('vmaContent');
@@ -97,15 +81,18 @@
             'data-tab-pane': 'tokens'
         });
 
-        const tokensToolbar = createElementWithAttrs('div', '', { class: 'toolbar page-section' });
-        tokensToolbar.innerHTML = `
-            <h3>API Tokens</h3>
-            <div class="toolbar-actions">
-                <button type="button" class="btn primary" data-token-create>
-                    <i class="fas fa-plus"></i> Create Token
-                </button>
-            </div>
-        `;
+        const tokensToolbar = createToolbar({
+            title: 'API Tokens',
+            buttons: [
+                {
+                    label: 'Create Token',
+                    icon: 'fas fa-plus',
+                    className: 'btn primary',
+                    attributes: { 'data-token-create': '' }
+                }
+            ]
+        });
+        const [createTokenBtn] = tokensToolbar.buttons;
 
         const tokensInfo = createElementWithAttrs('div', '', { class: 'page-section' });
         tokensInfo.innerHTML = `
@@ -158,7 +145,7 @@
         });
 
         // Token creation
-        tokensToolbar.querySelector('[data-token-create]').addEventListener('click', () => {
+        createTokenBtn.addEventListener('click', () => {
             showCreateModal(createModal, displayModal, tokensList, tokensMsg);
         });
 
@@ -425,7 +412,7 @@
   --host ${window.location.hostname}</code></pre>
         `;
 
-        copyBtn.onclick = () => copyToClipboard(tokenData.token, copyBtn);
+        copyBtn.onclick = () => copyToClipboard(tokenData.token, copyBtn, { successText: '<i class="fas fa-check"></i> Copied!' });
 
         modal.style.display = 'flex';
 
@@ -434,20 +421,6 @@
         };
     }
 
-    function copyToClipboard(text, button) {
-        navigator.clipboard.writeText(text).then(() => {
-            const originalHTML = button.innerHTML;
-            button.innerHTML = '<i class="fas fa-check"></i> Copied!';
-            button.classList.add('btn-success');
-            setTimeout(() => {
-                button.innerHTML = originalHTML;
-                button.classList.remove('btn-success');
-            }, 2000);
-        }).catch(err => {
-            console.error('Failed to copy:', err);
-            alert('Failed to copy token to clipboard');
-        });
-    }
 
     async function loadTokens(container, message) {
         clearElement(container);
@@ -460,13 +433,13 @@
             clearElement(container);
 
             if (!tokens || tokens.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <i class="fas fa-key fa-3x" style="color: var(--text-muted); margin-bottom: 1rem;"></i>
-                        <p>No API tokens yet.</p>
-                        <p>Create a token to use with the CLI or CI/CD pipelines.</p>
-                    </div>
-                `;
+                const emptyState = createEmptyState({
+                    message: 'No API tokens yet.',
+                    secondaryMessage: 'Create a token to use with the CLI or CI/CD pipelines.',
+                    icon: 'fas fa-key',
+                    context: 'standalone'
+                });
+                container.appendChild(emptyState);
                 return;
             }
 

@@ -8,7 +8,11 @@
         clearElement,
         fetchJSON,
         apiUrl,
-        setPageTitle
+        setPageTitle,
+        createMessageHelper,
+        normalizeApiResponse,
+        createFormToggle,
+        selectHelpers
     } = utils;
 
     const { registerRoute, setActiveRoute } = router;
@@ -18,21 +22,6 @@
         return;
     }
 
-    function normaliseCollection(payload) {
-        if (!payload || typeof payload !== 'object') {
-            return [];
-        }
-
-        if (Array.isArray(payload)) {
-            return payload;
-        }
-
-        if ('result' in payload && Array.isArray(payload.result)) {
-            return payload.result;
-        }
-
-        return [];
-    }
 
     function parseImageRecord(image) {
         if (!image) {
@@ -105,15 +94,7 @@
     }
 
     function resetSelectOptions(select, placeholder) {
-        if (!select) {
-            return;
-        }
-        select.innerHTML = '';
-        if (placeholder !== undefined) {
-            const option = createElementWithAttrs('option', placeholder, { value: '' });
-            select.appendChild(option);
-        }
-        select.value = '';
+        selectHelpers.reset(select, placeholder);
     }
 
     function getUniqueTeamsFromProducts(products) {
@@ -238,57 +219,14 @@
         return fallback;
     }
 
-    function createMessageHelper(element) {
-        const showMessage = (message, type = 'info') => {
-            if (!element) {
-                return;
-            }
-            element.textContent = message;
-            element.className = `inline-message inline-message--${type}`;
-            element.hidden = false;
-        };
-
-        const hideMessage = () => {
-            if (!element) {
-                return;
-            }
-            element.hidden = true;
-            element.textContent = '';
-        };
-
-        return { showMessage, hideMessage };
-    }
 
     function updateSelectOptions(select, products, placeholder) {
-        if (!select) {
-            return;
-        }
-
-        const currentValue = select.value;
-        select.innerHTML = '';
-
-        const placeholderOption = createElementWithAttrs('option', placeholder, { value: '' });
-        select.appendChild(placeholderOption);
-
-        products.forEach(product => {
-            const value = product.id ?? product.name;
-            if (!value) {
-                return;
-            }
-            const label = product.description
-                ? `${value}`
-                : value;
-            const option = createElementWithAttrs('option', label, { value });
-            select.appendChild(option);
+        selectHelpers.populate(select, products, {
+            valueKey: item => item.id ?? item.name,
+            labelKey: item => item.id ?? item.name,
+            placeholder: placeholder,
+            preserveValue: true
         });
-
-        if (products.some(product => (product.id ?? product.name) === currentValue)) {
-            select.value = currentValue;
-        } else {
-            select.value = '';
-        }
-
-        select.disabled = !products.length;
     }
 
     function resetCompareSelections(state, { preserveProduct = false } = {}) {
@@ -1111,8 +1049,8 @@
         const loadingRow = document.createElement('tr');
         loadingRow.appendChild(createElementWithAttrs('td', 'Loading…', { colspan: '4', class: 'empty' }));
         state.rowsBody.appendChild(loadingRow);
-        helpers.list?.hideMessage();
-        helpers.delete?.hideMessage();
+        helpers.list?.hide();
+        helpers.delete?.hide();
 
         try {
             const [imagesPayload, productsPayload] = await Promise.all([
@@ -1120,8 +1058,8 @@
                 fetchJSON(apiUrl('/products'))
             ]);
 
-            state.data.images = normaliseCollection(imagesPayload).map(parseImageRecord);
-            state.data.products = normaliseCollection(productsPayload);
+            state.data.images = normalizeApiResponse(imagesPayload).map(parseImageRecord);
+            state.data.products = normalizeApiResponse(productsPayload);
         } catch (error) {
             state.rowsBody.innerHTML = '';
             const row = document.createElement('tr');
@@ -1130,7 +1068,7 @@
             );
             state.rowsBody.appendChild(row);
             state.counter.textContent = '0';
-            helpers.list?.showMessage(error.message || 'Failed to fetch images.', 'error');
+            helpers.list?.show(error.message || 'Failed to fetch images.', 'error');
         }
 
         state.data.images = Array.isArray(state.data.images) ? state.data.images : [];
@@ -1177,16 +1115,16 @@
             }
 
         if (!hasProducts) {
-            helpers.form.showMessage('Create a product before registering images.', 'info');
-            helpers.compare?.showMessage('Create a product before comparing images.', 'info');
-            helpers.delete?.showMessage('Create a product before deleting images.', 'info');
+            helpers.form.show('Create a product before registering images.', 'info');
+            helpers.compare?.show('Create a product before comparing images.', 'info');
+            helpers.delete?.show('Create a product before deleting images.', 'info');
             resetCompareSelections(state);
             resetComparisonResults(state);
             resetDeleteSelections(state);
         } else {
-            helpers.form.hideMessage();
-            helpers.compare?.hideMessage();
-            helpers.delete?.hideMessage();
+            helpers.form.hide();
+            helpers.compare?.hide();
+            helpers.delete?.hide();
             syncCompareSelectors(state);
             syncDeleteSelectors(state);
             if (!state.compareCard?.classList.contains('show')) {
@@ -1208,7 +1146,7 @@
 
         state.form.addEventListener('submit', async event => {
             event.preventDefault();
-            helpers.form.hideMessage();
+            helpers.form.hide();
 
             const formData = new FormData(state.form);
             const payload = {
@@ -1219,7 +1157,7 @@
             };
 
             if (!payload.name || !payload.version || !payload.product || !payload.team) {
-                helpers.form.showMessage('All fields are required to register an image.', 'error');
+                helpers.form.show('All fields are required to register an image.', 'error');
                 return;
             }
 
@@ -1234,15 +1172,15 @@
                 }
 
                 state.setFormVisible?.(false);
-                helpers.form.showMessage('Image saved successfully.', 'success');
+                helpers.form.show('Image saved successfully.', 'success');
                 loadData(state, helpers);
             } catch (error) {
-                helpers.form.showMessage(error.message || 'Failed to save image.', 'error');
+                helpers.form.show(error.message || 'Failed to save image.', 'error');
             }
         });
 
         state.form.addEventListener('reset', () => {
-            helpers.form.hideMessage();
+            helpers.form.hide();
             if (state.teamSelect) {
                 state.teamSelect.value = '';
             }
@@ -1256,7 +1194,7 @@
         }
         state.teamSelect.addEventListener('change', () => {
             updateImageProductOptions(state);
-            helpers.form?.hideMessage();
+            helpers.form?.hide();
         });
     }
 
@@ -1296,11 +1234,11 @@
                 resetComparisonResults(state);
                 const hasImages = Boolean(state.compareImageSelect && state.compareImageSelect.options.length > 1);
                 if (!state.compareSelections.product) {
-                    helpers.compare?.showMessage('Select a product to begin comparing images.', 'info');
+                    helpers.compare?.show('Select a product to begin comparing images.', 'info');
                 } else if (!hasImages) {
-                    helpers.compare?.showMessage('No images available for the selected product yet.', 'info');
+                    helpers.compare?.show('No images available for the selected product yet.', 'info');
                 } else {
-                    helpers.compare?.hideMessage();
+                    helpers.compare?.hide();
                 }
             });
         }
@@ -1313,9 +1251,9 @@
                 const versions = updateCompareVersionOptions(state);
                 resetComparisonResults(state);
                 if (state.compareSelections.image && versions.length < 2) {
-                    helpers.compare?.showMessage('Select an image with at least two versions to compare.', 'info');
+                    helpers.compare?.show('Select an image with at least two versions to compare.', 'info');
                 } else {
-                    helpers.compare?.hideMessage();
+                    helpers.compare?.hide();
                 }
             });
         }
@@ -1359,7 +1297,7 @@
                 deleteSelections.image = '';
                 deleteSelections.version = '';
                 updateDeleteImageOptions(state);
-                helpers.delete?.hideMessage();
+                helpers.delete?.hide();
             });
         }
 
@@ -1368,7 +1306,7 @@
                 deleteSelections.image = deleteImageSelect.value || '';
                 deleteSelections.version = '';
                 updateDeleteVersionOptions(state);
-                helpers.delete?.hideMessage();
+                helpers.delete?.hide();
             });
         }
 
@@ -1386,20 +1324,20 @@
 
         state.deleteForm.addEventListener('submit', async event => {
             event.preventDefault();
-            helpers.delete?.hideMessage();
+            helpers.delete?.hide();
 
             const product = state.deleteProductSelect?.value?.trim();
             const image = state.deleteImageSelect?.value?.trim();
             const version = state.deleteVersionSelect?.value?.trim();
 
             if (!product || !image) {
-                helpers.delete?.showMessage('Product and image are required.', 'error');
+                helpers.delete?.show('Product and image are required.', 'error');
                 return;
             }
 
             const team = getTeamForProduct(state.data?.products || [], product);
             if (!team) {
-                helpers.delete?.showMessage('Unable to determine the team for this product.', 'error');
+                helpers.delete?.show('Unable to determine the team for this product.', 'error');
                 return;
             }
 
@@ -1421,7 +1359,7 @@
             try {
                 await fetchJSON(apiUrl(endpoint), { method: 'DELETE' });
                 await loadData(state, helpers);
-                helpers.delete?.showMessage(
+                helpers.delete?.show(
                     version
                         ? `Version "${version}" deleted successfully.`
                         : `All versions of "${image}" were deleted.`,
@@ -1431,12 +1369,12 @@
                 resetDeleteSelections(state);
                 updateDeleteImageOptions(state);
             } catch (error) {
-                helpers.delete?.showMessage(error.message || 'Failed to delete image.', 'error');
+                helpers.delete?.show(error.message || 'Failed to delete image.', 'error');
             }
         });
 
         state.deleteForm.addEventListener('reset', () => {
-            helpers.delete?.hideMessage();
+            helpers.delete?.hide();
             resetDeleteSelections(state);
             updateDeleteImageOptions(state);
         });
@@ -1449,7 +1387,7 @@
 
         state.compareForm.addEventListener('submit', async event => {
             event.preventDefault();
-            helpers.compare?.hideMessage();
+            helpers.compare?.hide();
 
             const product = state.compareProductSelect?.value?.trim();
             const image = state.compareImageSelect?.value?.trim();
@@ -1457,18 +1395,18 @@
             const targetVersion = state.compareTargetSelect?.value?.trim();
 
             if (!product || !image || !baseVersion || !targetVersion) {
-                helpers.compare?.showMessage('All fields are required to compare images.', 'error');
+                helpers.compare?.show('All fields are required to compare images.', 'error');
                 return;
             }
 
             if (baseVersion === targetVersion) {
-                helpers.compare?.showMessage('Select two different versions to compare.', 'error');
+                helpers.compare?.show('Select two different versions to compare.', 'error');
                 return;
             }
 
             const team = getTeamForProduct(state.data?.products || [], product);
             if (!team) {
-                helpers.compare?.showMessage('Unable to determine the team for this product.', 'error');
+                helpers.compare?.show('Unable to determine the team for this product.', 'error');
                 return;
             }
 
@@ -1504,18 +1442,18 @@
                 }
 
                 if (!comparison.length) {
-                    helpers.compare?.showMessage('No differences were found between these versions.', 'info');
+                    helpers.compare?.show('No differences were found between these versions.', 'info');
                 } else {
-                    helpers.compare?.hideMessage();
+                    helpers.compare?.hide();
                 }
             } catch (error) {
-                helpers.compare?.showMessage(error.message || 'Failed to compare images.', 'error');
+                helpers.compare?.show(error.message || 'Failed to compare images.', 'error');
                 resetComparisonResults(state, 'Comparison failed.');
             }
         });
 
         state.compareForm.addEventListener('reset', () => {
-            helpers.compare?.hideMessage();
+            helpers.compare?.hide();
             resetCompareSelections(state);
             updateCompareImageOptions(state);
             resetComparisonResults(state);
@@ -1737,78 +1675,40 @@
     }
 
     function setupFormToggle(state, helpers) {
-        const { toggleFormButton, formCard, form } = state;
-        if (!toggleFormButton || !formCard) {
-            return;
-        }
-
-        const firstField = form?.querySelector('input, textarea, select');
-
-        const updateButtonLabel = visible => {
-            toggleFormButton.innerHTML = visible
-                ? '<i class="fas fa-times"></i> Cancel'
-                : '<i class="fas fa-plus"></i> Create Image';
-            toggleFormButton.setAttribute('aria-expanded', String(visible));
-        };
-
-        const setFormVisible = visible => {
-            formCard.classList.toggle('show', visible);
-            updateButtonLabel(visible);
-            if (visible) {
-                helpers.form.hideMessage();
-                firstField?.focus();
-            } else {
-                form?.reset();
+        const toggle = createFormToggle({
+            button: state.toggleFormButton,
+            container: state.formCard,
+            form: state.form,
+            labels: {
+                open: '<i class="fas fa-plus"></i> Create Image',
+                close: '<i class="fas fa-times"></i> Cancel'
+            },
+            onShow: () => helpers.form.hide(),
+            onHide: () => {
                 if (state.teamSelect) {
                     state.teamSelect.value = '';
                 }
                 updateImageProductOptions(state);
             }
-        };
-
-        toggleFormButton.addEventListener('click', () => {
-            const shouldShow = !formCard.classList.contains('show');
-            setFormVisible(shouldShow);
         });
 
-        updateButtonLabel(false);
-        state.setFormVisible = setFormVisible;
+        state.setFormVisible = toggle.setVisible;
     }
 
     function setupDeleteToggle(state, helpers) {
-        const { toggleDeleteButton, deleteCard, deleteForm } = state;
-        if (!toggleDeleteButton || !deleteCard) {
-            return;
-        }
-
-        const firstField = deleteForm?.querySelector('select');
-
-        const updateButtonLabel = visible => {
-            toggleDeleteButton.innerHTML = visible
-                ? '<i class="fas fa-times"></i> Cancel Delete'
-                : '<i class="fas fa-trash"></i> Delete Images';
-            toggleDeleteButton.setAttribute('aria-expanded', String(visible));
-        };
-
-        const setDeleteVisible = visible => {
-            deleteCard.classList.toggle('show', visible);
-            updateButtonLabel(visible);
-            if (visible) {
-                helpers.delete?.hideMessage();
-                firstField?.focus();
-            } else {
-                deleteForm?.reset();
-                resetDeleteSelections(state);
-            }
-        };
-
-        toggleDeleteButton.addEventListener('click', () => {
-            const shouldShow = !deleteCard.classList.contains('show');
-            setDeleteVisible(shouldShow);
+        const toggle = createFormToggle({
+            button: state.toggleDeleteButton,
+            container: state.deleteCard,
+            form: state.deleteForm,
+            labels: {
+                open: '<i class="fas fa-trash"></i> Delete Images',
+                close: '<i class="fas fa-times"></i> Cancel Delete'
+            },
+            onShow: () => helpers.delete?.hide(),
+            onHide: () => resetDeleteSelections(state)
         });
 
-        updateButtonLabel(false);
-        state.setDeleteVisible = setDeleteVisible;
+        state.setDeleteVisible = toggle.setVisible;
     }
 
     function setupCompareToggle(state, helpers) {
@@ -1852,7 +1752,7 @@
                 if (state.detailCard) {
                     state.detailCard.hidden = true;
                 }
-                helpers.compare?.hideMessage();
+                helpers.compare?.hide();
                 firstField?.focus();
                 return;
             }
