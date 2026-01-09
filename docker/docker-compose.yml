@@ -8,11 +8,19 @@ services:
     - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
     - pgdata:/var/lib/postgresql/
 
-  init_db:
+  init_db_nvd:
     image: vma:latest
     env_file:
     - .env
     command: ["cve", "--init"]
+    depends_on:
+    - db
+
+  init_db_osv:
+    image: vma:latest
+    env_file:
+    - .env
+    command: ["osv", "--all"]
     depends_on:
     - db
 
@@ -22,7 +30,7 @@ services:
     - .env
     command: ["login", "--init"]
     depends_on:
-        init_db:
+        init_db_nvd:
             condition: service_completed_successfully
 
   rev_proxy:
@@ -43,10 +51,6 @@ services:
     image: web:latest
     env_file:
     - .env
-    environment:
-      # Internal API URL for service-to-service calls
-      # Use localhost (recommended) or rev_proxy for internal routing
-      - INTERNAL_API_URL=http://localhost:80
     depends_on:
     - rev_proxy
 

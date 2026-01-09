@@ -51,6 +51,89 @@ CREATE TABLE nvd_sync (
     chcksum TEXT NOT NULL
 );
 
+-- OSV (Open Source Vulnerability) Schema
+-- Stores vulnerability data from OSV database (https://osv.dev)
+-- Correlation with NVD: osv_aliases.alias = vulnerabilities.cve_id
+
+CREATE TABLE osv_vulnerabilities (
+    osv_id TEXT PRIMARY KEY,
+    schema_version TEXT NOT NULL,
+    modified TIMESTAMPTZ NOT NULL,
+    published TIMESTAMPTZ,
+    withdrawn TIMESTAMPTZ,
+    summary TEXT,
+    details TEXT,
+    database_specific JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_osv_vuln_modified ON osv_vulnerabilities(modified);
+CREATE INDEX idx_osv_vuln_published ON osv_vulnerabilities(published);
+
+CREATE TABLE osv_aliases (
+    osv_id TEXT NOT NULL REFERENCES osv_vulnerabilities(osv_id) ON DELETE CASCADE,
+    alias TEXT NOT NULL,
+    PRIMARY KEY (osv_id, alias)
+);
+
+-- Critical index for NVD correlation: JOIN osv_aliases.alias = vulnerabilities.cve_id
+CREATE INDEX idx_osv_aliases_alias ON osv_aliases(alias);
+CREATE INDEX idx_osv_aliases_cve ON osv_aliases(alias) WHERE alias LIKE 'CVE-%';
+
+CREATE TABLE osv_references (
+    id SERIAL PRIMARY KEY,
+    osv_id TEXT NOT NULL REFERENCES osv_vulnerabilities(osv_id) ON DELETE CASCADE,
+    ref_type TEXT NOT NULL,  -- ADVISORY, ARTICLE, DETECTION, DISCUSSION, REPORT, FIX, etc.
+    url TEXT NOT NULL
+);
+
+CREATE INDEX idx_osv_refs_osv_id ON osv_references(osv_id);
+
+CREATE TABLE osv_severity (
+    id SERIAL PRIMARY KEY,
+    osv_id TEXT NOT NULL REFERENCES osv_vulnerabilities(osv_id) ON DELETE CASCADE,
+    severity_type TEXT NOT NULL,  -- CVSS_V2, CVSS_V3, CVSS_V4, or custom (e.g., "Ubuntu")
+    score TEXT NOT NULL  -- CVSS vector string or numeric score
+);
+
+CREATE INDEX idx_osv_severity_osv_id ON osv_severity(osv_id);
+CREATE INDEX idx_osv_severity_type ON osv_severity(severity_type);
+
+CREATE TABLE osv_affected (
+    id SERIAL PRIMARY KEY,
+    osv_id TEXT NOT NULL REFERENCES osv_vulnerabilities(osv_id) ON DELETE CASCADE,
+    package_ecosystem TEXT NOT NULL,  -- PyPI, npm, Go, Maven, etc.
+    package_name TEXT NOT NULL,
+    package_purl TEXT,  -- Package URL (purl) format
+    ranges JSONB,  -- Version ranges with events (introduced, fixed, etc.)
+    versions JSONB,  -- Explicit array of affected versions
+    ecosystem_specific JSONB,
+    database_specific JSONB
+);
+
+CREATE INDEX idx_osv_affected_osv_id ON osv_affected(osv_id);
+CREATE INDEX idx_osv_affected_ecosystem ON osv_affected(package_ecosystem);
+CREATE INDEX idx_osv_affected_package ON osv_affected(package_name);
+CREATE INDEX idx_osv_affected_eco_pkg ON osv_affected(package_ecosystem, package_name);
+
+CREATE TABLE osv_credits (
+    id SERIAL PRIMARY KEY,
+    osv_id TEXT NOT NULL REFERENCES osv_vulnerabilities(osv_id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    contact JSONB,  -- Array of contact methods
+    credit_type TEXT  -- FINDER, REPORTER, ANALYST, COORDINATOR, etc.
+);
+
+CREATE INDEX idx_osv_credits_osv_id ON osv_credits(osv_id);
+
+-- Sync tracking for OSV database updates
+CREATE TABLE osv_sync (
+    id TEXT PRIMARY KEY,
+    last_fetched TIMESTAMPTZ NOT NULL,
+    ecosystem TEXT,  -- Track sync per ecosystem (PyPI, npm, etc.) or 'all' for full sync
+    records_count INTEGER DEFAULT 0
+);
+
 CREATE TABLE products (
     id TEXT NOT NULL,
     description TEXT,
