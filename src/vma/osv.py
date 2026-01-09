@@ -1,96 +1,132 @@
 from loguru import logger
 
 import os
+import asyncio
 import json
+import shutil
 from google.cloud import storage
 from google.cloud.exceptions import NotFound, Forbidden
 import zipfile
 from psycopg2.extras import Json
 import csv
 from datetime import datetime
+from io import StringIO
+
+import aiofiles
 
 from vma import connector as c
 
 
-def download_gcs_bucket(prefix: str, name: str, dst: str) -> str:
-    # no credentials because the bucket is public
-    local_path = ""
-    try:
-        c = storage.Client.create_anonymous_client()
-        b = c.bucket(prefix)
-        if not b.exists():
-            logger.error(f"Bucket {name} does not exist")
-            raise Exception(f"Bucket {name} does not exist")
+async def download_gcs_bucket(prefix: str, name: str, dst: str) -> str:
+    """
+    Download a file from GCS bucket using thread pool to avoid blocking.
+    """
+    local_path = os.path.join(dst, name)
 
-        blob = b.blob(name)
+    # Run blocking GCS operations in thread pool
+    def _download():
+        try:
+            c = storage.Client.create_anonymous_client()
+            b = c.bucket(prefix)
+            if not b.exists():
+                logger.error(f"Bucket {name} does not exist")
+                raise Exception(f"Bucket {name} does not exist")
 
-        if not blob:
-            logger.error(f"No files found in bucket {name}")
-            raise Exception(f"No files found in bucket {name}")
+            blob = b.blob(name)
 
-        logger.debug("Files found in bucket")
+            if not blob:
+                logger.error(f"No files found in bucket {name}")
+                raise Exception(f"No files found in bucket {name}")
 
-        local_path = os.path.join(dst, name)
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        blob.download_to_filename(local_path)
-        logger.debug(f"Downloaded: {local_path}")
-    except NotFound:
-        logger.error(f"Bucket {name} not found")
-    except Forbidden:
-        logger.error(f"Access denied to bucket {name}")
-    except Exception as e:
-        logger.error(f"Error while downloading the gcs bucket {name}: {e}")
-    return local_path
+            logger.debug("Files found in bucket")
+
+            # Create directory if needed
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+
+            # Download file
+            blob.download_to_filename(local_path)
+            logger.debug(f"Downloaded: {local_path}")
+            return local_path
+        except NotFound:
+            logger.error(f"Bucket {name} not found")
+            return ""
+        except Forbidden:
+            logger.error(f"Access denied to bucket {name}")
+            return ""
+        except Exception as e:
+            logger.error(f"Error while downloading the gcs bucket {name}: {e}")
+            return ""
+
+    # Execute in thread pool
+    result = await asyncio.to_thread(_download)
+    return result
 
 
-def unzip_file(name):
+async def unzip_file(name):
+    """
+    Extract zip file using thread pool (CPU-bound operation).
+    """
     extracted = "osv/all/extracted/"
-    with zipfile.ZipFile(name, "r") as zip_ref:
-        zip_ref.extractall(extracted)
+
+    # Run CPU-bound extraction in thread pool
+    def _extract():
+        with zipfile.ZipFile(name, "r") as zip_ref:
+            zip_ref.extractall(extracted)
+        return extracted
+
+    result = await asyncio.to_thread(_extract)
     logger.debug(f"File {name} unziped in {extracted}")
-    return extracted
+    return result
 
 
-def get_all():
-    fname = download_gcs_bucket(
+async def get_all():
+    fname = await download_gcs_bucket(
         prefix="osv-vulnerabilities", name="all.zip", dst="osv/all"
     )
-    ufile = unzip_file(fname)
+    ufile = await unzip_file(fname)
     return ufile
 
 
-def get_recent():
-    fname = download_gcs_bucket(
+async def get_recent():
+    fname = await download_gcs_bucket(
         prefix="osv-vulnerabilities", name="modified_id.csv", dst="osv/recent"
     )
     return fname
 
 
-def clean_osv_files(path):
+async def clean_osv_files(path):
     """
     Clean up OSV files and directories after processing.
+    Uses thread pool for filesystem operations.
 
     Args:
         path: Path to file or directory to delete
     """
-    import shutil
+    if not path:
+        logger.debug(f"Empty path provided, nothing to clean")
+        return
 
-    if not path or not os.path.exists(path):
+    # Run filesystem checks in thread pool
+    exists = await asyncio.to_thread(os.path.exists, path)
+    if not exists:
         logger.debug(f"Path does not exist, nothing to clean: {path}")
         return
 
     try:
-        if os.path.isfile(path):
-            os.remove(path)
+        is_file = await asyncio.to_thread(os.path.isfile, path)
+        if is_file:
+            await asyncio.to_thread(os.remove, path)
             logger.debug(f"Deleted file: {path}")
-        elif os.path.isdir(path):
-            shutil.rmtree(path)
-            logger.debug(f"Deleted directory: {path}")
+        else:
+            is_dir = await asyncio.to_thread(os.path.isdir, path)
+            if is_dir:
+                await asyncio.to_thread(shutil.rmtree, path)
+                logger.debug(f"Deleted directory: {path}")
     except Exception as e:
         logger.error(f"Error cleaning up {path}: {e}")
 
 
-def parse_osv_file(path):
+async def parse_osv_file(path):
     """
     Parses an OSV (Open Source Vulnerability) JSON file and converts it to VMA OSV database format.
 
@@ -120,8 +156,9 @@ def parse_osv_file(path):
     data_credits = []
 
     try:
-        with open(path, "r") as f:
-            osv_data = json.load(f)
+        async with aiofiles.open(path, "r") as f:
+            content = await f.read()
+            osv_data = json.loads(content)
 
         # Extract OSV ID (required field)
         osv_id = osv_data.get("id", "")
@@ -273,12 +310,13 @@ def parse_osv_file(path):
     ]
 
 
-def process_all():
-    src = get_all()
-    for file in os.listdir(src):
+async def process_all():
+    src = await get_all()
+    files = await asyncio.to_thread(os.listdir, src)
+    for file in files:
         file_path = os.path.join(src, file)
         if file.endswith(".json"):
-            parsed_data = parse_osv_file(file_path)
+            parsed_data = await parse_osv_file(file_path)
             # Unpack the 6 data arrays
             (
                 data_vuln,
@@ -289,7 +327,7 @@ def process_all():
                 data_credits,
             ) = parsed_data
             # Insert into database
-            c.insert_osv_data(
+            await c.insert_osv_data(
                 data_vuln=data_vuln,
                 data_aliases=data_aliases,
                 data_refs=data_refs,
@@ -297,10 +335,10 @@ def process_all():
                 data_affected=data_affected,
                 data_credits=data_credits,
             )
-    clean_osv_files("osv/")
+    await clean_osv_files("osv/")
 
 
-def process_recent():
+async def process_recent():
     """
     Process recently modified OSV vulnerabilities from the modified_id.csv file.
 
@@ -313,9 +351,10 @@ def process_recent():
     """
 
     # Download the CSV file with recently modified IDs
-    csv_path = get_recent()
+    csv_path = await get_recent()
 
-    if not csv_path or not os.path.exists(csv_path):
+    csv_path_exists = await asyncio.to_thread(os.path.exists, csv_path) if csv_path else False
+    if not csv_path or not csv_path_exists:
         logger.error("Failed to download modified_id.csv")
         return
 
@@ -327,8 +366,10 @@ def process_recent():
     updates_successful = 0
 
     try:
-        with open(csv_path, "r") as csvfile:
-            csv_reader = csv.DictReader(csvfile)
+        async with aiofiles.open(csv_path, "r") as csvfile:
+            content = await csvfile.read()
+            # Parse CSV from string
+            csv_reader = csv.DictReader(StringIO(content))
 
             for row in csv_reader:
                 total_entries += 1
@@ -340,7 +381,7 @@ def process_recent():
                     continue
 
                 # Compare the last modified date with our database
-                db_record = c.get_osv_by_id(osv_id)
+                db_record = await c.get_osv_by_id(osv_id)
 
                 needs_update = False
                 if db_record and db_record.get("status"):
@@ -378,19 +419,20 @@ def process_recent():
                         # OSV files are stored as: gs://osv-vulnerabilities/<ECOSYSTEM>/<ID>.json
                         # For simplicity, we'll try common ecosystems or use the all/ directory
                         osv_file_path = f"osv/recent/{osv_id}.json"
-                        os.makedirs(os.path.dirname(osv_file_path), exist_ok=True)
+                        await asyncio.to_thread(os.makedirs, os.path.dirname(osv_file_path), exist_ok=True)
 
                         # Download from GCS (individual vulnerability files)
                         # The ID format typically includes the ecosystem (e.g., "OSV-2024-001" or "GHSA-xxxx-yyyy-zzzz")
-                        downloaded = download_gcs_bucket(
+                        downloaded = await download_gcs_bucket(
                             prefix="osv-vulnerabilities",
                             name=f"{osv_id}.json",
                             dst="osv/recent",
                         )
 
-                        if downloaded and os.path.exists(downloaded):
+                        downloaded_exists = await asyncio.to_thread(os.path.exists, downloaded) if downloaded else False
+                        if downloaded and downloaded_exists:
                             # Parse the OSV JSON file
-                            parsed_data = parse_osv_file(downloaded)
+                            parsed_data = await parse_osv_file(downloaded)
 
                             # Unpack the 6 data arrays
                             (
@@ -404,7 +446,7 @@ def process_recent():
 
                             # Update the database
                             if data_vuln:
-                                result = c.insert_osv_data(
+                                result = await c.insert_osv_data(
                                     data_vuln=data_vuln,
                                     data_aliases=data_aliases,
                                     data_refs=data_refs,
@@ -436,4 +478,4 @@ def process_recent():
     except Exception as e:
         logger.error(f"Error processing modified_id.csv: {e}")
     finally:
-        clean_osv_files("osv/recent/")
+        await clean_osv_files("osv/recent/")

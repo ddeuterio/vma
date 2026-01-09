@@ -10,6 +10,8 @@ import vma.api.models.v1 as mod_v1
 import vma.helper as helper
 from vma import connector as c
 from vma import auth as a
+from vma import nvd
+from vma import osv
 
 
 router = APIRouter(prefix="/api/v1")
@@ -28,10 +30,10 @@ def is_authorized(scope: dict, teams: list, op: list, is_root: bool) -> bool:
     return True
 
 
-def get_teams_for_authz(scope: dict, is_root: bool) -> list:
+async def get_teams_for_authz(scope: dict, is_root: bool) -> list:
     if is_root:
         teams = []
-        for team in c.get_teams()["result"]:
+        for team in (await c.get_teams())["result"]:
             teams.append(team["name"])
         return teams
     return list(scope.keys())
@@ -43,7 +45,7 @@ async def get_products(
 ) -> dict:
     res = None
 
-    t = get_teams_for_authz(scope=user_data.scope, is_root=user_data.root)
+    t = await get_teams_for_authz(scope=user_data.scope, is_root=user_data.root)
     if not is_authorized(
         is_root=user_data.root, scope=user_data.scope, teams=t, op=READ_ONLY
     ):
@@ -52,7 +54,7 @@ async def get_products(
         )
 
     try:
-        res = c.get_products(teams=t)
+        res = await c.get_products(teams=t)
     except Exception as e:
         logger.error(f"Error getting products: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -77,7 +79,7 @@ async def get_product(
 
     res = None
     try:
-        res = c.get_products(teams=[team_id], id=prod_id)
+        res = await c.get_products(teams=[team_id], id=prod_id)
     except Exception as e:
         logger.error(f"Error getting a product: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -110,7 +112,7 @@ async def post_product(
 
     res = None
     try:
-        res = c.insert_product(name=name, description=description, team=team)
+        res = await c.insert_product(name=name, description=description, team=team)
     except Exception as e:
         logger.error(f"Error inserting product: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -136,7 +138,7 @@ async def product(
 
     res = None
     try:
-        res = c.delete_product(id=name, team=team)
+        res = await c.delete_product(id=name, team=team)
     except Exception as e:
         logger.error(f"Error inserting product: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -145,7 +147,7 @@ async def product(
 
 @router.get("/stats")
 async def stats(user_data: mod_v1.JwtData = Depends(a.validate_access_token)) -> dict:
-    t = get_teams_for_authz(is_root=user_data.root, scope=user_data.scope)
+    t = await get_teams_for_authz(is_root=user_data.root, scope=user_data.scope)
     if not is_authorized(
         is_root=user_data.root, scope=user_data.scope, teams=t, op=READ_ONLY
     ):
@@ -155,8 +157,8 @@ async def stats(user_data: mod_v1.JwtData = Depends(a.validate_access_token)) ->
 
     stats = None
     try:
-        products = c.get_products(teams=t)
-        images = c.get_images(teams=t)
+        products = await c.get_products(teams=t)
+        images = await c.get_images(teams=t)
         stats = {
             "products": len(products["result"]) if products["status"] else None,
             "images": len(images["result"]) if images["status"] else None,
@@ -169,7 +171,7 @@ async def stats(user_data: mod_v1.JwtData = Depends(a.validate_access_token)) ->
 
 @router.get("/images")
 async def images(user_data: mod_v1.JwtData = Depends(a.validate_access_token)) -> dict:
-    t = get_teams_for_authz(is_root=user_data.root, scope=user_data.scope)
+    t = await get_teams_for_authz(is_root=user_data.root, scope=user_data.scope)
     if not is_authorized(
         is_root=user_data.root, scope=user_data.scope, teams=t, op=READ_ONLY
     ):
@@ -179,7 +181,7 @@ async def images(user_data: mod_v1.JwtData = Depends(a.validate_access_token)) -
 
     res = None
     try:
-        res = c.get_images(teams=t)
+        res = await c.get_images(teams=t)
     except Exception as e:
         logger.error(f"Getting images: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -210,7 +212,9 @@ async def image(
 
     res = None
     try:
-        res = c.insert_image(name=name, version=version, product=product, team=team)
+        res = await c.insert_image(
+            name=name, version=version, product=product, team=team
+        )
     except Exception as e:
         logger.error(f"Error inserting image: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -244,7 +248,7 @@ async def image_vuln(
 
     res = None
     try:
-        res = c.get_image_vulnerabilities(product, name, version, team)
+        res = await c.get_image_vulnerabilities(product, name, version, team)
         res["result"] = helper.format_vulnerability_rows(res["result"])
     except Exception as e:
         logger.error(f"Error getting image: {e}")
@@ -281,7 +285,7 @@ async def image_compare(
 
     res = None
     try:
-        comp = c.compare_image_versions(
+        comp = await c.compare_image_versions(
             product=product, image=image, version_a=ver1, version_b=ver2, team=team
         )
         comp["result"] = helper.normalize_comparison(comp["result"])
@@ -307,9 +311,9 @@ async def cve(
     try:
         cve_id = f"%{helper.escape_like(cve_id)}%"
         if src_val == "nvd":
-            res = c.get_vulnerabilities_by_id(id=cve_id)
+            res = await c.get_vulnerabilities_by_id(id=cve_id)
         elif src_val == "osv":
-            res = c.get_osv_by_ilike_id(osv_id=cve_id)
+            res = await c.get_osv_by_ilike_id(osv_id=cve_id)
         else:
             res = {"status": False, "result": ""}
     except Exception as e:
@@ -349,12 +353,14 @@ async def importer(
 
     res = None
     try:
-        chk = c.get_images(name=image, version=version, product=product, teams=[team])
+        chk = await c.get_images(
+            name=image, version=version, product=product, teams=[team]
+        )
         if not chk["status"]:
-            ins = c.insert_image(
+            ins = await c.insert_image(
                 name=image, version=version, product=product, team=team
             )
-        res = c.insert_image_vulnerabilities(data)
+        res = await c.insert_image_vulnerabilities(data)
     except Exception as e:
         logger.error(f"Error inserting vulnerabilities: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -382,7 +388,7 @@ async def delete_product(
 
     res = None
     try:
-        res = c.delete_product(id=prod_id, team=team)
+        res = await c.delete_product(id=prod_id, team=team)
     except Exception as e:
         logger.error(f"Error deleting a product: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -414,9 +420,11 @@ async def delete_image(
     res = {"status": False, "result": "Could not delete the image"}
     try:
         if name and version:
-            res = c.delete_image(product=prod_id, name=name, version=version, team=team)
+            res = await c.delete_image(
+                product=prod_id, name=name, version=version, team=team
+            )
         elif name:
-            res = c.delete_image(product=prod_id, name=name, team=team)
+            res = await c.delete_image(product=prod_id, name=name, team=team)
     except Exception as e:
         logger.error(f"Error deleting a product: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -444,7 +452,7 @@ async def post_team(
     try:
         if not description:
             description = ""
-        res = c.insert_teams(name=name, description=description)
+        res = await c.insert_teams(name=name, description=description)
     except Exception as e:
         logger.error(f"Error inserting product: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -455,7 +463,7 @@ async def post_team(
 async def get_teams(
     user_data: mod_v1.JwtData = Depends(a.validate_access_token),
 ) -> dict:
-    t = get_teams_for_authz(scope=user_data.scope, is_root=user_data.root)
+    t = await get_teams_for_authz(scope=user_data.scope, is_root=user_data.root)
     if not is_authorized(
         is_root=user_data.root, scope=user_data.scope, teams=t, op=READ_ONLY
     ):
@@ -465,7 +473,7 @@ async def get_teams(
 
     res = None
     try:
-        res = c.get_teams()
+        res = await c.get_teams()
     except Exception as e:
         logger.error(f"Error getting products: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -487,7 +495,7 @@ async def get_team(
 
     res = None
     try:
-        res = c.get_teams(name=team_name)
+        res = await c.get_teams(name=team_name)
     except Exception as e:
         logger.error(f"Error getting a product: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -509,7 +517,7 @@ async def delete_team(
 
     res = None
     try:
-        res = c.delete_team(id=team_id)
+        res = await c.delete_team(id=team_id)
     except Exception as e:
         logger.error(f"Error deleting a product: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -528,7 +536,7 @@ async def post_user(
     if not email or not password or not scopes:
         raise HTTPException(status_code=400, detail=helper.errors["400"])
 
-    t = get_teams_for_authz(scope=scopes, is_root=user_data.root)
+    t = await get_teams_for_authz(scope=scopes, is_root=user_data.root)
     if not is_authorized(
         is_root=user_data.root, scope=user_data.scope, teams=t, op=ADMIN
     ):
@@ -538,7 +546,7 @@ async def post_user(
 
     res = None
     try:
-        res = c.insert_users(
+        res = await c.insert_users(
             email=email,
             password=a.hasher.hash(password),
             name=name,
@@ -580,7 +588,7 @@ async def patch_user(
         hpass = None
         if password:
             hpass = a.hasher.hash(password)
-        res = c.update_users(
+        res = await c.update_users(
             email=email, password=hpass, name=name, scopes=scopes, is_root=is_root
         )
     except Exception as e:
@@ -593,7 +601,7 @@ async def patch_user(
 async def get_users(
     user_data: mod_v1.JwtData = Depends(a.validate_access_token),
 ) -> dict:
-    t = get_teams_for_authz(scope=user_data.scope, is_root=user_data.root)
+    t = await get_teams_for_authz(scope=user_data.scope, is_root=user_data.root)
     if not is_authorized(
         is_root=user_data.root, scope=user_data.scope, teams=t, op=ADMIN
     ):
@@ -603,7 +611,7 @@ async def get_users(
 
     res = None
     try:
-        res = c.get_users()
+        res = await c.get_users()
     except Exception as e:
         logger.error(f"Error getting products: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -623,7 +631,7 @@ async def get_user(
 
     res = None
     try:
-        res = c.get_users(email=user_email)
+        res = await c.get_users(email=user_email)
     except Exception as e:
         logger.error(f"Error getting a product: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -634,7 +642,7 @@ async def get_user(
 async def delete_user(
     email: str, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
 ) -> dict:
-    t = get_teams_for_authz(scope=user_data.scope, is_root=user_data.root)
+    t = await get_teams_for_authz(scope=user_data.scope, is_root=user_data.root)
     if not is_authorized(
         is_root=user_data.root, scope=user_data.scope, teams=t, op=ADMIN
     ):
@@ -645,7 +653,7 @@ async def delete_user(
     res = None
     try:
         user_email = helper.validate_input(email)
-        res = c.delete_user(email=user_email)
+        res = await c.delete_user(email=user_email)
     except Exception as e:
         logger.error(f"Error deleting a product: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
@@ -670,8 +678,8 @@ async def token(
     access_token = None
 
     try:
-        user_data = c.get_users_w_hpass(email=username)
-        user_scope = c.get_scope_by_user(email=username)
+        user_data = await c.get_users_w_hpass(email=username)
+        user_scope = await c.get_scope_by_user(email=username)
 
         if not user_data["result"] or (
             not a.hasher.verify(password, user_data["result"][0]["hpass"])
@@ -707,7 +715,7 @@ async def token(
 
 
 @router.get("/refresh_token")
-def refresh(request: Request, response: Response) -> dict:
+async def refresh(request: Request, response: Response) -> dict:
     refresh_token = request.cookies.get("refresh_token")
 
     if not refresh_token:
@@ -758,7 +766,7 @@ def refresh(request: Request, response: Response) -> dict:
 
 
 @router.get("/logout")
-def logout(request: Request, response: Response) -> dict:
+async def logout(request: Request, response: Response) -> dict:
     refresh_token = request.cookies.get("refresh_token")
     if not refresh_token:
         raise HTTPException(status_code=401, detail="Missing refresh token")
@@ -805,7 +813,7 @@ async def create_api_token(
                 days=request.expires_days
             )
 
-        q = c.insert_api_token(
+        q = await c.insert_api_token(
             token_hash=token_hash,
             prefix=prefix,
             user_email=request.username,
@@ -850,9 +858,9 @@ async def list_api_tokens(user_data: mod_v1.JwtData = Depends(a.validate_access_
     try:
         is_root = user_data.root
         if is_root:
-            q = c.list_api_tokens()
+            q = await c.list_api_tokens()
         else:
-            q = c.list_api_tokens(user_email=user_data.username)
+            q = await c.list_api_tokens(user_email=user_data.username)
 
         if not q["status"]:
             raise HTTPException(status_code=500, detail=q["result"])
@@ -874,7 +882,7 @@ async def get_api_token(
 ):
     """Get details of a specific API token."""
     try:
-        q = c.get_api_token_by_id(token_id)
+        q = await c.get_api_token_by_id(token_id)
 
         if not q["status"]:
             raise HTTPException(status_code=404, detail="Token not found")
@@ -908,7 +916,7 @@ async def revoke_api_token(
     - Root users can revoke any token
     """
     try:
-        q = c.get_api_token_by_id(token_id)
+        q = await c.get_api_token_by_id(token_id)
 
         if not q["status"]:
             raise HTTPException(status_code=404, detail="Token not found")
@@ -920,7 +928,7 @@ async def revoke_api_token(
                 status_code=403, detail="Unauthorized to view this token"
             )
 
-        q = c.revoke_api_token(
+        q = await c.revoke_api_token(
             token_id=token_id, user_email=user_data.username, admin=user_data.root
         )
 
@@ -933,4 +941,34 @@ async def revoke_api_token(
     except Exception as e:
         logger.error(f"Error revoking API token: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    return res
+
+
+@router.post("/update/{db}")
+async def update_db(
+    db: str, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
+) -> dict:
+    db_val = helper.validate_input(db)
+
+    if db_val not in ["osv", "nvd"]:
+        raise HTTPException(status_code=400, detail=helper.errors["400"])
+
+    if not is_authorized(
+        is_root=user_data.root, scope=user_data.scope, teams=["admin"], op=ADMIN
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    res = {"status": True, "result": "Action triggered"}
+    try:
+        if db_val == "nvd":
+            # endpoint does not need to wait for this to finish
+            await nvd.get_modified_cves()
+        elif db_val == "osv":
+            # endpoint does not need to wait for this to finish
+            await osv.get_recent()
+    except Exception as e:
+        logger.error(f"Error updating database {db_val}: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
     return res

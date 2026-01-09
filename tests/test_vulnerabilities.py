@@ -12,7 +12,7 @@ Tests cover:
 """
 
 import pytest
-from unittest.mock import patch, MagicMock, mock_open
+from unittest.mock import patch, MagicMock, mock_open, AsyncMock
 from fastapi import status
 from httpx import AsyncClient, ASGITransport
 from datetime import datetime, timezone
@@ -115,7 +115,7 @@ class TestCVESearch:
 
             mock_helper.validate_input.side_effect = lambda x: x
             mock_helper.escape_like.side_effect = lambda x: x
-            mock_c.get_vulnerabilities_by_id.return_value = {
+            mock_c.get_vulnerabilities_by_id = AsyncMock(return_value={
                 "status": True,
                 "result": {
                     "CVE-2023-1234": {
@@ -126,10 +126,10 @@ class TestCVESearch:
                         "cvss_severity": "HIGH"
                     }
                 }
-            }
+            })
 
             response = await client.get(
-                "/api/v1/cve/CVE-2023-1234",
+                "/api/v1/cve/nvd/CVE-2023-1234",
                 headers={"Authorization": "Bearer fake_token"}
             )
 
@@ -150,16 +150,16 @@ class TestCVESearch:
 
             mock_helper.validate_input.side_effect = lambda x: x
             mock_helper.escape_like.side_effect = lambda x: x
-            mock_c.get_vulnerabilities_by_id.return_value = {
+            mock_c.get_vulnerabilities_by_id = AsyncMock(return_value={
                 "status": True,
                 "result": {
                     "CVE-2023-1234": {"source": "nvd@nist.gov"},
                     "CVE-2023-5678": {"source": "nvd@nist.gov"}
                 }
-            }
+            })
 
             response = await client.get(
-                "/api/v1/cve/CVE-2023",
+                "/api/v1/cve/nvd/CVE-2023",
                 headers={"Authorization": "Bearer fake_token"}
             )
 
@@ -211,13 +211,13 @@ class TestImageVulnerabilities:
                     "cvss": {"score": 7.5, "severity": "HIGH"}
                 }
             ]
-            mock_c.get_image_vulnerabilities.return_value = {
+            mock_c.get_image_vulnerabilities = AsyncMock(return_value={
                 "status": True,
                 "result": [
                     ("CVE-2023-1234", "1.2.3", "deb", "libssl", "1.0.0", "/usr/lib",
                      datetime.now(), datetime.now(), 7.5, "HIGH", "3.1")
                 ]
-            }
+            })
 
             response = await client.get(
                 "/api/v1/image/team1/prod1/app/1.0/vuln",
@@ -298,10 +298,10 @@ class TestImageComparison:
                     }
                 ]
             }
-            mock_c.compare_image_versions.return_value = {
+            mock_c.compare_image_versions = AsyncMock(return_value={
                 "status": True,
                 "result": []
-            }
+            })
 
             response = await client.get(
                 "/api/v1/image/compare/team1/prod1/app/1.0/1.1",
@@ -340,10 +340,10 @@ class TestImageComparison:
                     }
                 ]
             }
-            mock_c.compare_image_versions.return_value = {
+            mock_c.compare_image_versions = AsyncMock(return_value={
                 "status": True,
                 "result": []
-            }
+            })
 
             response = await client.get(
                 "/api/v1/image/compare/team1/prod1/app/1.0/1.1",
@@ -381,10 +381,10 @@ class TestImageComparison:
                     }
                 ]
             }
-            mock_c.compare_image_versions.return_value = {
+            mock_c.compare_image_versions = AsyncMock(return_value={
                 "status": True,
                 "result": []
-            }
+            })
 
             response = await client.get(
                 "/api/v1/image/compare/team1/prod1/app/1.0/1.1",
@@ -421,12 +421,12 @@ class TestVulnerabilityImport:
 
         mock_c = mock_router_dependencies["connector"]
 
-        mock_c.get_images.return_value = {"status": False}
-        mock_c.insert_image.return_value = {"status": True}
-        mock_c.insert_image_vulnerabilities.return_value = {
+        mock_c.get_images = AsyncMock(return_value={"status": False})
+        mock_c.insert_image = AsyncMock(return_value={"status": True})
+        mock_c.insert_image_vulnerabilities = AsyncMock(return_value={
             "status": True,
             "result": "2 vulnerabilities imported"
-        }
+        })
 
         vuln_data = [
             ["grype", "app", "1.0", "prod1", "team1", "CVE-2023-1234",
@@ -472,12 +472,12 @@ class TestVulnerabilityImport:
         mock_c = mock_router_dependencies["connector"]
 
         # Image doesn't exist
-        mock_c.get_images.return_value = {"status": False}
-        mock_c.insert_image.return_value = {"status": True}
-        mock_c.insert_image_vulnerabilities.return_value = {
+        mock_c.get_images = AsyncMock(return_value={"status": False})
+        mock_c.insert_image = AsyncMock(return_value={"status": True})
+        mock_c.insert_image_vulnerabilities = AsyncMock(return_value={
             "status": True,
             "result": "Imported"
-        }
+        })
 
         vuln_data = [
             ["grype", "new_app", "1.0", "prod1", "team1", "CVE-2023-9999",
@@ -585,23 +585,25 @@ class TestVulnerabilityImport:
 class TestGrypeParser:
     """Tests for Grype scanner output parsing"""
 
-    def test_grype_get_image_metadata(self, sample_grype_report, tmp_path):
+    @pytest.mark.asyncio
+    async def test_grype_get_image_metadata(self, sample_grype_report, tmp_path):
         """Test extracting image metadata from Grype report"""
         report_file = tmp_path / "grype_report.json"
         report_file.write_text(json.dumps(sample_grype_report))
 
-        metadata = parser.grype_get_image_metadata(str(report_file))
+        metadata = await parser.grype_get_image_metadata(str(report_file))
 
         assert metadata[0] == "ubuntu"
         assert metadata[1] == "22.04"
 
-    def test_grype_parse_report(self, sample_grype_report, tmp_path):
+    @pytest.mark.asyncio
+    async def test_grype_parse_report(self, sample_grype_report, tmp_path):
         """Test parsing vulnerabilities from Grype report"""
         report_file = tmp_path / "grype_report.json"
         report_file.write_text(json.dumps(sample_grype_report))
 
         metadata = ["grype", "app", "1.0", "prod1", "team1"]
-        vulnerabilities = parser.grype_parse_report(metadata, str(report_file))
+        vulnerabilities = await parser.grype_parse_report(metadata, str(report_file))
 
         assert len(vulnerabilities) == 2
 
@@ -618,7 +620,8 @@ class TestGrypeParser:
         assert vuln1[10] == "libssl"  # component name
         assert vuln1[11] == "1.0.0"  # component version
 
-    def test_grype_parse_report_no_fix_versions(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_grype_parse_report_no_fix_versions(self, tmp_path):
         """Test parsing vulnerability with no fix available"""
         report = {
             "distro": {"name": "ubuntu", "version": "22.04"},
@@ -642,13 +645,14 @@ class TestGrypeParser:
         report_file.write_text(json.dumps(report))
 
         metadata = ["grype", "app", "1.0", "prod1", "team1"]
-        vulnerabilities = parser.grype_parse_report(metadata, str(report_file))
+        vulnerabilities = await parser.grype_parse_report(metadata, str(report_file))
 
         assert len(vulnerabilities) == 1
         # Fix versions should be empty string
         assert vulnerabilities[0][6] == ""
 
-    def test_grype_parse_report_multiple_locations(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_grype_parse_report_multiple_locations(self, tmp_path):
         """Test parsing vulnerability with multiple file locations"""
         report = {
             "distro": {"name": "alpine", "version": "3.17"},
@@ -676,7 +680,7 @@ class TestGrypeParser:
         report_file.write_text(json.dumps(report))
 
         metadata = ["grype", "app", "1.0", "prod1", "team1"]
-        vulnerabilities = parser.grype_parse_report(metadata, str(report_file))
+        vulnerabilities = await parser.grype_parse_report(metadata, str(report_file))
 
         # Locations should be comma-separated
         locations = vulnerabilities[0][12]

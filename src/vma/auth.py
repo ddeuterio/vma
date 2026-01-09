@@ -156,7 +156,7 @@ async def validate_api_token(authorization: str = Header(None)) -> dict:
         return {"status": False, "result": h.errors["invalid_token_format"]}
 
     prefix = token[:12]
-    result = c.get_api_token_by_prefix(prefix)
+    result = await c.get_api_token_by_prefix(prefix)
 
     if not result["status"]:
         logger.error("Token was not identified, prefix does not exist in the database")
@@ -178,9 +178,9 @@ async def validate_api_token(authorization: str = Header(None)) -> dict:
         logger.debug("Token has expired")
         return {"status": False, "result": "Token has expired"}
 
-    c.update_token_last_used(token_data["id"])
+    await c.update_token_last_used(token_data["id"])
 
-    user_result = c.get_users(email=token_data["user_email"])
+    user_result = await c.get_users(email=token_data["user_email"])
     if not user_result["status"] or not user_result["result"]:
         logger.debug("User not found")
         return {"status": False, "result": "User not found"}

@@ -11,7 +11,7 @@ Tests cover:
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi import status, HTTPException
 from httpx import AsyncClient, ASGITransport
 from datetime import datetime, timedelta, timezone
@@ -260,7 +260,7 @@ class TestAuthenticationEndpoints:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.get_users_w_hpass.return_value = {
+            mock_c.get_users_w_hpass = AsyncMock(return_value={
                 "status": True,
                 "result": [{
                     "email": "user@test.com",
@@ -268,11 +268,11 @@ class TestAuthenticationEndpoints:
                     "name": "Test User",
                     "is_root": False
                 }]
-            }
-            mock_c.get_scope_by_user.return_value = {
+            })
+            mock_c.get_scope_by_user = AsyncMock(return_value={
                 "status": True,
                 "result": {"team1": "write"}
-            }
+            })
             mock_auth.hasher.verify.return_value = True
             mock_auth.create_token.return_value = "fake_access_token"
             mock_auth._expire_refresh_token = 2
@@ -296,7 +296,7 @@ class TestAuthenticationEndpoints:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.get_users_w_hpass.return_value = {
+            mock_c.get_users_w_hpass = AsyncMock(return_value={
                 "status": True,
                 "result": [{
                     "email": "user@test.com",
@@ -304,11 +304,11 @@ class TestAuthenticationEndpoints:
                     "name": "Test User",
                     "is_root": False
                 }]
-            }
-            mock_c.get_scope_by_user.return_value = {
+            })
+            mock_c.get_scope_by_user = AsyncMock(return_value={
                 "status": True,
                 "result": {"team1": "write"}
-            }
+            })
             mock_auth.hasher.verify.return_value = False
 
             response = await client.post(
@@ -327,10 +327,10 @@ class TestAuthenticationEndpoints:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.get_users_w_hpass.return_value = {
+            mock_c.get_users_w_hpass = AsyncMock(return_value={
                 "status": True,
                 "result": []
-            }
+            })
 
             response = await client.post(
                 "/api/v1/token",
@@ -577,10 +577,10 @@ class TestCrossTeamAccess:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.get_products.return_value = {
+            mock_c.get_products = AsyncMock(return_value={
                 "status": True,
                 "result": [{"id": "prod1", "description": "Product 1", "team": "team1"}]
-            }
+            })
 
             response = await client.get(
                 "/api/v1/product/team1/prod1",
@@ -620,10 +620,10 @@ class TestCrossTeamAccess:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.get_products.return_value = {
+            mock_c.get_products = AsyncMock(return_value={
                 "status": True,
                 "result": [{"id": "prod1", "description": "Product 1", "team": "team2"}]
-            }
+            })
 
             # Root user accessing team2 (not in their explicit scope)
             response = await client.get(

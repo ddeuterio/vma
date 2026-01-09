@@ -25,8 +25,8 @@ class InterceptHandler(logging.Handler):
 
         # Find caller from where originated the logged message
         frame, depth = logging.currentframe(), 6
-        while frame.f_code.co_filename == logging.__file__:
-            frame = frame.f_back
+        while frame.f_code.co_filename == logging.__file__:  # type: ignore[arg-type]
+            frame = frame.f_back  # type: ignore[arg-type]
             depth += 1
 
         logger.opt(depth=depth, exception=record.exc_info).log(
@@ -46,7 +46,7 @@ def configure_logging(level: int, uvicorn: bool = False):
     logger.add(
         "vma.log", level=level, enqueue=True, format=log_format, rotation="500 MB"
     )
-    configure_logging._configured = True
+    configure_logging._configured = True  # type: ignore[args-type]
 
 
 def format_vulnerability_rows(rows: list) -> list:

@@ -1,14 +1,15 @@
 import os
-import requests
+import asyncio
 import gzip
 import shutil
 import json
 
+import httpx
+import aiofiles
 from dotenv import load_dotenv
 from loguru import logger
 from datetime import datetime, timedelta
-from psycopg2.extras import Json
-from ratelimit import limits, sleep_and_retry
+from aiolimiter import AsyncLimiter
 
 import vma.connector as c
 
@@ -21,170 +22,186 @@ PERIOD = 30
 MAX_REQ = 50
 MAX_RETRIES = 3
 
+# Create async rate limiter (50 requests per 30 seconds)
+rate_limiter = AsyncLimiter(MAX_REQ, PERIOD)
 
-@sleep_and_retry
-@limits(calls=MAX_REQ, period=PERIOD)
-def nvd_api_call(url, stream=None):
+
+async def nvd_api_call(url):
     """
-    Auxiliar function to make API calls to NVD without surpasing the NVD API limit
+    Async function to make API calls to NVD without surpassing the NVD API limit.
+    Uses httpx for async HTTP and aiolimiter for rate limiting.
 
     Args:
-        URL to query
-        Stream is True if gz file.
+        url: URL to query
+
+    Returns:
+        httpx.Response object
 
     Raises:
-        Exception when the API call could not be performed
+        Exception when the API call could not be performed after retries
     """
     hd = {"apiKey": _api_key}
-
     i = 0
-    while i < MAX_RETRIES:
-        r = requests.get(url, stream=stream, headers=hd)
-        if r.status_code == 200:
-            break
-        i += 1
+    r = None
 
-    if (i >= MAX_RETRIES) or (not r.status_code == 200):
-        logger.debug(f"Could not perform the API call: {r.status_code} {url}")
-        raise Exception(f"Could not perform the API call: {r.status_code} {url}")
+    async with rate_limiter:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            while i < MAX_RETRIES:
+                r = await client.get(url, headers=hd, follow_redirects=True)  # type: ignore[arg-type]
+                if r.status_code == 200:
+                    break
+                i += 1
+
+    if (not r) or (i >= MAX_RETRIES) or (not r.status_code == 200):
+        status_code = r.status_code if r else ""
+        logger.debug(f"Could not perform the API call: {status_code} {url}")
+        raise Exception(f"Could not perform the API call: {status_code} {url}")
     return r
 
 
-def download_and_extract_gz(url):
+def _decompress_gz(f_name, f_name_json):
     """
-    Auxiliar function used to download .gz json files and extract them
-
-    Args:
-        url to download
-
-    Returns:
-        json file name
+    Helper for CPU-bound gzip decompression.
+    Runs in thread pool to avoid blocking event loop.
     """
-    r = nvd_api_call(url, stream=True)
-    f_name = url.split("/")[-1]
-    with open(f_name, "wb") as f:
-        for chunk in r.iter_content(chunk_size=8192):
-            if chunk:
-                f.write(chunk)
-
-    r.close()
-
-    f_name_json = f_name.split(".gz")[0]
     with gzip.open(f_name, "rb") as f_in:
         with open(f_name_json, "wb") as f_out:
-            shutil.copyfileobj(f_in, f_out)
+            shutil.copyfileobj(f_in, f_out)  # type: ignore[arg-type]
 
-    os.remove(f_name)
+
+async def download_and_extract_gz(url):
+    """
+    Async function to download .gz json files and extract them.
+    Uses aiofiles for async file I/O and runs gzip decompression in thread pool.
+
+    Args:
+        url: URL to download
+
+    Returns:
+        str: Extracted JSON file name
+    """
+    r = await nvd_api_call(url)
+    f_name = url.split("/")[-1]
+
+    # Write .gz file asynchronously
+    async with aiofiles.open(f_name, "wb") as f:
+        await f.write(r.content)
+
+    # Decompress in thread pool (CPU-bound operation)
+    f_name_json = f_name.split(".gz")[0]
+    await asyncio.to_thread(_decompress_gz, f_name, f_name_json)
+
+    # Remove .gz file in thread pool
+    await asyncio.to_thread(os.remove, f_name)
+
     logger.debug(f"File saved in disk: {f_name_json}")
     return f_name_json
 
 
-def insert_vulnerabilities(f_meta, f_json):
+async def insert_vulnerabilities(f_meta, f_json):
     """
-    Insert vulnerabilities from the json files into the database
+    Insert vulnerabilities from the JSON files into the database.
+    Async version using aiofiles and awaiting database operations.
 
     Args:
-        meta data from the meta files
-        json files
+        f_meta: List of metadata tuples from the meta files
+        f_json: List of JSON file paths
     """
     for i in range(len(f_json)):
-        # parse data
-        with open(f_json[i], "r") as f:
-            data = json.load(f)
+        async with aiofiles.open(f_json[i], "r") as f:
+            content = await f.read()
+            data = json.loads(content)
             parsed_data = parse_nvd_data(data=data["vulnerabilities"])
-            # insert vuln
-            c.insert_vulnerabilities(parsed_data[0], parsed_data[1])
-        os.remove(f_json[i])
-        c.insert_year_data(f_meta[i])
+            await c.insert_vulnerabilities(parsed_data[0], parsed_data[1])
+
+        await asyncio.to_thread(os.remove, f_json[i])
+        await c.insert_year_data(f_meta[i])
 
 
-def get_modified_cves():
+async def get_modified_cves():
     """
-    Checks the changes in the cves
-    Gets the changes and updates the db
+    Async function to check for CVE changes and update the database.
+    Compares NVD meta timestamps with local database and fetches updates.
     """
-
     year = "recent"
     base_url = "https://nvd.nist.gov/feeds/json/cve/2.0"
     recents_url = f"{base_url}/nvdcve-2.0-recent.json.gz"
 
-    r = nvd_api_call(f"{base_url}/nvdcve-2.0-{year}.meta")
+    r = await nvd_api_call(f"{base_url}/nvdcve-2.0-{year}.meta")
 
-    # first, check recents
+    # First, check recents
     data = (r.text.splitlines()[0]).split("lastModifiedDate:")[1]
     data_iso = datetime.fromisoformat(data).astimezone()
-    last_date = c.get_last_fetched_date(year)
-
-    r.close()
+    last_date = await c.get_last_fetched_date(year)
 
     logger.debug(f"Dates data_iso: {data_iso}; last_date: {last_date}")
 
     if (not last_date) or (data_iso > last_date):
         # Check if we need to do a full sync (>7 days difference or no previous sync)
         if (not last_date) or ((data_iso - last_date) > timedelta(days=7)):
-            # check if there has been changes in files for years 2002 until now
+            # Check if there has been changes in files for years 2002 until now
             news = []
             meta = []
-            for y in c.get_all_years_nvd_sync():
+            for y in await c.get_all_years_nvd_sync():
                 # Get the last updated time for the year
-                dt = c.get_nvd_sync_data(y)
+                dt = await c.get_nvd_sync_data(y)
                 _date = datetime.fromisoformat(dt[1]).astimezone()
 
-                r = nvd_api_call(f"{base_url}/nvdcve-2.0-{y}.meta")
+                r = await nvd_api_call(f"{base_url}/nvdcve-2.0-{y}.meta")
                 nvd_date = datetime.fromisoformat(
                     (r.text.splitlines()[0]).split("lastModifiedDate:")[1]
                 ).astimezone()
                 nvd_chcksum = (r.text.splitlines()[-1]).split("sha256:")[1]
-                # compare it with the latest meta of that year
-                if (nvd_date > y_date) and (not (nvd_chcksum == dt[2])):
-                    # there is a new file
+                if (nvd_date > _date) and (not (nvd_chcksum == dt[2])):
+                    # There is a new file
                     news.append(y)
                     meta.append((y, nvd_date, nvd_chcksum))
 
-            f_json = download_selected_cves(news)
-            c.insert_year_data(
+            f_json = await download_selected_cves(news)
+            await c.insert_year_data(
                 ("recent", data_iso, (r.text.splitlines()[-1]).split("sha256:")[1])
             )
         else:
-            # get the latest recent file
-            f_json = [download_and_extract_gz(recents_url)]
+            # Get the latest recent file
+            f_json = [await download_and_extract_gz(recents_url)]
             meta = [("recent", data_iso, (r.text.splitlines()[-1]).split("sha256:")[1])]
 
-        insert_vulnerabilities(meta, f_json)
+        await insert_vulnerabilities(meta, f_json)
         logger.info("CVE DB updated with the latest changes")
     else:
         logger.info("No CVE updates, nothing was done")
 
 
-def download_selected_cves(years):
+async def download_selected_cves(years):
     """
-    Get all the json files for CVEs published over the course of (start year, end year)
+    Async function to download JSON files for CVEs published for specified years.
+
     Args:
-        List [] with the years to be updated
+        years: List of years to download
 
     Returns:
-        List with filenames
+        List of downloaded JSON filenames
     """
-
     f_names = []
     for year in years:
         url = f"https://nvd.nist.gov/feeds/json/cve/2.0/nvdcve-2.0-{year}.json.gz"
-        f_names.append(download_and_extract_gz(url))
+        f_names.append(await download_and_extract_gz(url))
     return f_names
 
 
-def init_db():
+async def init_db():
     """
-    Get all the json files for CVEs published over the course of (2002, now) and updates the db
+    Async function to initialize database with all CVE data from 2002 to present.
+    Downloads and processes all NVD CVE JSON files.
     """
-
     base_url = "https://nvd.nist.gov/feeds/json/cve/2.0"
     f_names = []
     meta = []
     y_range = [i for i in range(2002, (datetime.now().year + 1))]
-    y_range.append("recent")
+    y_range.append("recent")  # type: ignore[arg-type]
+
     for year in y_range:
-        r = nvd_api_call(f"{base_url}/nvdcve-2.0-{year}.meta")
+        r = await nvd_api_call(f"{base_url}/nvdcve-2.0-{year}.meta")
         nvd_date = datetime.fromisoformat(
             (r.text.splitlines()[0]).split("lastModifiedDate:")[1]
         ).astimezone()
@@ -192,9 +209,9 @@ def init_db():
         meta.append((year, nvd_date, nvd_chcksum))
 
         url = f"https://nvd.nist.gov/feeds/json/cve/2.0/nvdcve-2.0-{year}.json.gz"
-        f_names.append(download_and_extract_gz(url))
+        f_names.append(await download_and_extract_gz(url))
 
-    insert_vulnerabilities(meta, f_names)
+    await insert_vulnerabilities(meta, f_names)
 
 
 def parse_nvd_data(data):
@@ -232,17 +249,13 @@ def parse_nvd_data(data):
         for ref in vuln["cve"]["references"]:
             references += f"{ref['url']}, "
         references = references[:-2]  # remove the last " ,"
-        # this will be stored as bjson
+        # Store as plain dicts/lists - asyncpg handles JSON serialization automatically
         descriptions = (
-            Json(vuln["cve"]["descriptions"]) if "descriptions" in vuln["cve"] else None
+            vuln["cve"]["descriptions"] if "descriptions" in vuln["cve"] else None
         )
-        weaknesses = (
-            Json(vuln["cve"]["weaknesses"]) if "weaknesses" in vuln["cve"] else None
-        )
+        weaknesses = vuln["cve"]["weaknesses"] if "weaknesses" in vuln["cve"] else None
         config = (
-            Json(vuln["cve"]["configurations"])
-            if "configurations" in vuln["cve"]
-            else None
+            vuln["cve"]["configurations"] if "configurations" in vuln["cve"] else None
         )
         # metrics; cvss data
         for version in vuln["cve"]["metrics"].keys():

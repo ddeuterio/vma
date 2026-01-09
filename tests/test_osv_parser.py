@@ -5,13 +5,16 @@ Test script for OSV parser with new schema
 
 import sys
 import os
+import asyncio
+import pytest
 
 # Add src directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from vma.osv import parse_osv_file
 
-def test_osv_parser():
+@pytest.mark.asyncio
+async def test_osv_parser():
     """Test the OSV parser with sample data"""
     test_file = "osv/test_osv.json"
 
@@ -19,7 +22,7 @@ def test_osv_parser():
     print("=" * 60)
 
     # Parse the test file
-    result = parse_osv_file(test_file)
+    result = await parse_osv_file(test_file)
 
     if not result or len(result) != 6:
         print("ERROR: Parser did not return expected format [vuln, aliases, refs, severity, affected, credits]")

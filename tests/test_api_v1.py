@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi import status
 from httpx import AsyncClient, ASGITransport
 from datetime import datetime
@@ -62,12 +62,12 @@ class TestProductEndpoints:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         with patch("vma.api.routers.v1.c") as mock_c:
-            mock_c.get_products.return_value = {
+            mock_c.get_products = AsyncMock(return_value={
                 "status": True,
                 "result": [
                     {"id": "prod1", "description": "Product 1", "team": "team1"}
                 ]
-            }
+            })
 
             response = await client.get(
                 "/api/v1/products",
@@ -92,10 +92,10 @@ class TestProductEndpoints:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.get_products.return_value = {
+            mock_c.get_products = AsyncMock(return_value={
                 "status": True,
                 "result": [{"id": "prod1", "description": "Product 1", "team": "team1"}]
-            }
+            })
 
             response = await client.get(
                 "/api/v1/product/team1/prod1",
@@ -136,10 +136,10 @@ class TestProductEndpoints:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.insert_product.return_value = {
+            mock_c.insert_product = AsyncMock(return_value={
                 "status": True,
                 "result": {"id": "new_prod"}
-            }
+            })
 
             response = await client.post(
                 "/api/v1/product",
@@ -162,10 +162,10 @@ class TestProductEndpoints:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.delete_product.return_value = {
+            mock_c.delete_product = AsyncMock(return_value={
                 "status": True,
                 "result": {"deleted_rows": 1}
-            }
+            })
 
             import json
             response = await client.request(
@@ -213,12 +213,12 @@ class TestImageEndpoints:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         with patch("vma.api.routers.v1.c") as mock_c:
-            mock_c.get_images.return_value = {
+            mock_c.get_images = AsyncMock(return_value={
                 "status": True,
                 "result": [
                     {"name": "app", "version": "1.0", "product": "prod1", "team": "team1"}
                 ]
-            }
+            })
 
             response = await client.get(
                 "/api/v1/images",
@@ -242,10 +242,10 @@ class TestImageEndpoints:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.insert_image.return_value = {
+            mock_c.insert_image = AsyncMock(return_value={
                 "status": True,
                 "result": {"name": "app", "version": "1.0", "product": "prod1", "team": "team1"}
-            }
+            })
 
             response = await client.post(
                 "/api/v1/image",
@@ -273,7 +273,7 @@ class TestCVEEndpoints:
 
             mock_helper.validate_input.side_effect = lambda x: x
             mock_helper.escape_like.side_effect = lambda x: x
-            mock_c.get_vulnerabilities_by_id.return_value = {
+            mock_c.get_vulnerabilities_by_id = AsyncMock(return_value={
                 "status": True,
                 "result": {
                     "CVE-2023-1234": {
@@ -282,10 +282,10 @@ class TestCVEEndpoints:
                         "status": "Analyzed"
                     }
                 }
-            }
+            })
 
             response = await client.get(
-                "/api/v1/cve/CVE-2023-1234",
+                "/api/v1/cve/nvd/CVE-2023-1234",
                 headers={"Authorization": "Bearer fake_token"}
             )
 
@@ -306,14 +306,14 @@ class TestStatsEndpoint:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         with patch("vma.api.routers.v1.c") as mock_c:
-            mock_c.get_products.return_value = {
+            mock_c.get_products = AsyncMock(return_value={
                 "status": True,
                 "result": [{"id": "prod1"}, {"id": "prod2"}]
-            }
-            mock_c.get_images.return_value = {
+            })
+            mock_c.get_images = AsyncMock(return_value={
                 "status": True,
                 "result": [{"name": "img1"}, {"name": "img2"}, {"name": "img3"}]
-            }
+            })
 
             response = await client.get(
                 "/api/v1/stats",
@@ -338,10 +338,10 @@ class TestTeamEndpoints:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         with patch("vma.api.routers.v1.c") as mock_c:
-            mock_c.get_teams.return_value = {
+            mock_c.get_teams = AsyncMock(return_value={
                 "status": True,
                 "result": [{"name": "team1", "description": "Team 1"}]
-            }
+            })
 
             response = await client.get(
                 "/api/v1/teams",
@@ -364,10 +364,10 @@ class TestTeamEndpoints:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.insert_teams.return_value = {
+            mock_c.insert_teams = AsyncMock(return_value={
                 "status": True,
                 "result": {"name": "new_team"}
-            }
+            })
 
             response = await client.post(
                 "/api/v1/team",
@@ -402,7 +402,7 @@ class TestUserEndpoints:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         with patch("vma.api.routers.v1.c") as mock_c:
-            mock_c.get_users.return_value = {
+            mock_c.get_users = AsyncMock(return_value={
                 "status": True,
                 "result": [
                     {
@@ -412,7 +412,7 @@ class TestUserEndpoints:
                         "scope": {"team1": "read"}
                     }
                 ]
-            }
+            })
 
             response = await client.get(
                 "/api/v1/users",
@@ -435,7 +435,7 @@ class TestUserEndpoints:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.get_users.return_value = {
+            mock_c.get_users = AsyncMock(return_value={
                 "status": True,
                 "result": [
                     {
@@ -445,7 +445,7 @@ class TestUserEndpoints:
                         "scope": {"team1": "write"}
                     }
                 ]
-            }
+            })
 
             response = await client.get(
                 "/api/v1/user/user@test.com",
@@ -469,10 +469,10 @@ class TestUserEndpoints:
             mock_helper.validate_input.side_effect = lambda x: x
             mock_helper.validate_scopes.return_value = {"team1": "admin"}
             mock_hasher.hash.return_value = "hashed_password"
-            mock_c.insert_users.return_value = {
+            mock_c.insert_users = AsyncMock(return_value={
                 "status": True,
                 "result": {"user": "newuser@test.com"}
-            }
+            })
 
             response = await client.post(
                 "/api/v1/user",
@@ -501,7 +501,7 @@ class TestAuthenticationEndpoints:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.get_users.return_value = {
+            mock_c.get_users_w_hpass = AsyncMock(return_value={
                 "status": True,
                 "result": [
                     {
@@ -511,13 +511,13 @@ class TestAuthenticationEndpoints:
                         "is_root": False
                     }
                 ]
-            }
-            mock_c.get_scope_by_user.return_value = {
+            })
+            mock_c.get_scope_by_user = AsyncMock(return_value={
                 "status": True,
                 "result": {"team1": "write"}
-            }
+            })
             mock_auth.hasher.verify.return_value = True
-            mock_auth.create_token.return_value = "fake_access_token"
+            mock_auth.create_token.side_effect = ["fake_access_token", "fake_refresh_token"]
             mock_auth._expire_refresh_token = 2
 
             response = await client.post(
@@ -538,7 +538,7 @@ class TestAuthenticationEndpoints:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.get_users.return_value = {
+            mock_c.get_users_w_hpass = AsyncMock(return_value={
                 "status": True,
                 "result": [
                     {
@@ -548,11 +548,11 @@ class TestAuthenticationEndpoints:
                         "is_root": False
                     }
                 ]
-            }
-            mock_c.get_scope_by_user.return_value = {
+            })
+            mock_c.get_scope_by_user = AsyncMock(return_value={
                 "status": True,
                 "result": {"team1": "write"}
-            }
+            })
             mock_auth.hasher.verify.return_value = False
 
             response = await client.post(
@@ -604,19 +604,20 @@ class TestAuthorizationHelpers:
         )
         assert result is False
 
+    @pytest.mark.asyncio
     @patch("vma.api.routers.v1.c")
-    def test_get_teams_for_authz_root(self, mock_connector):
+    async def test_get_teams_for_authz_root(self, mock_connector):
         """Test get_teams_for_authz - root user gets all teams"""
         from vma.api.routers.v1 import get_teams_for_authz
 
-        mock_connector.get_teams.return_value = {
+        mock_connector.get_teams = AsyncMock(return_value={
             "result": [
                 {"name": "team1"},
                 {"name": "team2"},
                 {"name": "team3"}
             ]
-        }
+        })
 
-        result = get_teams_for_authz(scope={"team1": "admin"}, is_root=True)
+        result = await get_teams_for_authz(scope={"team1": "admin"}, is_root=True)
         assert len(result) == 3
         assert "team1" in result

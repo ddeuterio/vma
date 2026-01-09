@@ -6,7 +6,7 @@ across all test files.
 """
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock
 from httpx import AsyncClient, ASGITransport
 from datetime import datetime, timezone
 
@@ -517,18 +517,37 @@ def mock_router_dependencies(mock_helper_errors):
     with patch("vma.api.routers.v1.c") as mock_c, \
          patch("vma.api.routers.v1.helper") as mock_helper:
 
-        # Set up helper with all error codes
+        # Set up helper with all error codes (sync functions)
         mock_helper.errors = mock_helper_errors
         mock_helper.validate_input.side_effect = lambda x: x
         mock_helper.escape_like.side_effect = lambda x: x
         mock_helper.format_vulnerability_rows.side_effect = lambda x: x
         mock_helper.normalize_comparison.side_effect = lambda x: x
+        mock_helper.validate_scopes.side_effect = lambda x: x if x else None
 
-        # Set up connector with sensible defaults
-        mock_c.get_products.return_value = {"status": True, "result": []}
-        mock_c.get_images.return_value = {"status": True, "result": []}
-        mock_c.get_teams.return_value = {"status": True, "result": []}
-        mock_c.get_users.return_value = {"status": True, "result": []}
-        mock_c.get_api_token_by_id.return_value = {"status": True, "result": {}}
+        # Set up connector with sensible defaults (async functions - use AsyncMock)
+        mock_c.get_products = AsyncMock(return_value={"status": True, "result": []})
+        mock_c.get_images = AsyncMock(return_value={"status": True, "result": []})
+        mock_c.get_teams = AsyncMock(return_value={"status": True, "result": []})
+        mock_c.get_users = AsyncMock(return_value={"status": True, "result": []})
+        mock_c.get_api_token_by_id = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.get_api_token_by_prefix = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.insert_product = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.insert_image = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.insert_teams = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.insert_users = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.insert_api_token = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.insert_image_vulnerabilities = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.delete_product = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.delete_image = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.delete_team = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.delete_user = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.update_users = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.update_token_last_used = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.get_scope_by_user = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.get_users_w_hpass = AsyncMock(return_value={"status": True, "result": []})
+        mock_c.get_vulnerabilities_by_id = AsyncMock(return_value={"status": True, "result": []})
+        mock_c.get_image_vulnerabilities = AsyncMock(return_value={"status": True, "result": []})
+        mock_c.compare_image_versions = AsyncMock(return_value={"status": True, "result": []})
 
         yield {"connector": mock_c, "helper": mock_helper}

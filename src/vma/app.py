@@ -1,5 +1,7 @@
 import argparse
-import requests
+import logging
+import asyncio
+import httpx
 
 from loguru import logger
 
@@ -39,7 +41,7 @@ def setup_args():
         "--host", default="0.0.0.0", help="Define the IP to run it on"
     )
     importer.add_argument("--type", choices=["grype"], help="Scanner type")
-    importer.add_argument("--api-version", choices=["v1"], help="API version to use")
+    importer.add_argument("--api-version", choices=["v1"], default="v1", help="API version to use")
     importer.add_argument("--product", help="Product ID")
     importer.add_argument("--image", help="Image ID")
     importer.add_argument("--version", help="Image version")
@@ -57,24 +59,24 @@ def setup_args():
     return parser.parse_args()
 
 
-def main():
+async def main():
     args = setup_args()
     try:
         # nvd mode
         if args.mode == "cve":
             if args.init:
-                nvd.init_db()
+                await nvd.init_db()
             elif args.update:
-                nvd.get_modified_cves()
+                await nvd.get_modified_cves()
         # osv mode
         elif args.mode == "osv":
             if args.all:
                 logger.info("Starting OSV full database download and processing...")
-                osv.process_all()
+                await osv.process_all()
                 logger.info("OSV full database processing complete")
             elif args.recent:
                 logger.info("Starting OSV recent updates processing...")
-                osv.process_recent()
+                await osv.process_recent()
                 logger.info("OSV recent updates processing complete")
             else:
                 logger.error("Please specify --all or --recent for OSV mode")
@@ -102,7 +104,7 @@ def main():
                     args.product,
                     args.team,
                 ]
-                data = par.grype_parse_report(image_metadata, file)
+                data = await par.grype_parse_report(image_metadata, file)
                 payload = {
                     "scanner": args.type,
                     "product": args.product,
@@ -111,18 +113,22 @@ def main():
                     "team": args.team,
                     "data": data,
                 }
-            res = requests.post(
-                url=url, json=payload, headers=headers, verify=(not args.ignore_cert)
-            )
-            res_json = res.json()
+            async with httpx.AsyncClient() as client:
+                res = await client.post(
+                    url=url,
+                    json=payload,
+                    headers=headers,
+                    verify=(not args.ignore_cert) if hasattr(args, 'ignore_cert') else True
+                )
+                res_json = res.json()
             if res_json["status"]:
                 logger.info("Import was successfull.")
             else:
                 logger.error("Import failed.")
         elif args.mode == "login":
             if args.init:
-                c.insert_teams(name="admin", description="Admin team")
-                c.insert_users(
+                await c.insert_teams(name="admin", description="Admin team")
+                await c.insert_users(
                     email="admin@vma.com",
                     password=a.hasher.hash("changeme"),
                     name="admin",
@@ -135,5 +141,5 @@ def main():
 
 
 if __name__ == "__main__":
-    helper.configure_logging("DEBUG")
-    main()
+    helper.configure_logging(logging.DEBUG)
+    asyncio.run(main())

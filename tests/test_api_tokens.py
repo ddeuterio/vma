@@ -12,7 +12,7 @@ Tests cover:
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi import status
 from httpx import AsyncClient, ASGITransport
 from datetime import datetime, timedelta, timezone
@@ -98,13 +98,13 @@ class TestAPITokenCreation:
             mock_auth.generate_api_token.return_value = mock_token
             mock_auth.hasher.hash.return_value = "hashed_token"
 
-            mock_c.insert_api_token.return_value = {
+            mock_c.insert_api_token = AsyncMock(return_value={
                 "status": True,
                 "result": {
                     "id": 1,
                     "created_at": datetime.now(timezone.utc)
                 }
-            }
+            })
 
             response = await client.post(
                 "/api/v1/apitoken",
@@ -158,13 +158,13 @@ class TestAPITokenCreation:
             mock_auth.generate_api_token.return_value = mock_token
             mock_auth.hasher.hash.return_value = "hashed_token"
 
-            mock_c.insert_api_token.return_value = {
+            mock_c.insert_api_token = AsyncMock(return_value={
                 "status": True,
                 "result": {
                     "id": 1,
                     "created_at": datetime.now(timezone.utc)
                 }
-            }
+            })
 
             response = await client.post(
                 "/api/v1/apitoken",
@@ -341,7 +341,7 @@ class TestAPITokenListing:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.list_api_tokens.return_value = {
+        mock_c.list_api_tokens = AsyncMock(return_value={
             "status": True,
             "result": [
                 {
@@ -355,7 +355,7 @@ class TestAPITokenListing:
                     "revoked": False
                 }
             ]
-        }
+        })
 
         response = await client.get(
             "/api/v1/tokens",
@@ -379,7 +379,7 @@ class TestAPITokenListing:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.list_api_tokens.return_value = {
+        mock_c.list_api_tokens = AsyncMock(return_value={
             "status": True,
             "result": [
                 {
@@ -403,7 +403,7 @@ class TestAPITokenListing:
                     "revoked": False
                 }
             ]
-        }
+        })
 
         response = await client.get(
             "/api/v1/tokens",
@@ -426,7 +426,7 @@ class TestAPITokenListing:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.list_api_tokens.return_value = {
+        mock_c.list_api_tokens = AsyncMock(return_value={
             "status": True,
             "result": [
                 {
@@ -440,7 +440,7 @@ class TestAPITokenListing:
                     "revoked": False
                 }
             ]
-        }
+        })
 
         response = await client.get(
             "/api/v1/tokens",
@@ -464,7 +464,7 @@ class TestAPITokenRetrieval:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_api_token_by_id.return_value = {
+        mock_c.get_api_token_by_id = AsyncMock(return_value={
             "status": True,
             "result": {
                 "id": 1,
@@ -476,7 +476,7 @@ class TestAPITokenRetrieval:
                 "expires_at": None,
                 "revoked": False
             }
-        }
+        })
 
         response = await client.get(
             "/api/v1/tokens/1",
@@ -496,7 +496,7 @@ class TestAPITokenRetrieval:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_api_token_by_id.return_value = {
+        mock_c.get_api_token_by_id = AsyncMock(return_value={
             "status": True,
             "result": {
                 "id": 1,
@@ -508,7 +508,7 @@ class TestAPITokenRetrieval:
                 "expires_at": None,
                 "revoked": False
             }
-        }
+        })
 
         response = await client.get(
             "/api/v1/tokens/1",
@@ -526,7 +526,7 @@ class TestAPITokenRetrieval:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_api_token_by_id.return_value = {
+        mock_c.get_api_token_by_id = AsyncMock(return_value={
             "status": True,
             "result": {
                 "id": 1,
@@ -538,7 +538,7 @@ class TestAPITokenRetrieval:
                 "expires_at": None,
                 "revoked": False
             }
-        }
+        })
 
         response = await client.get(
             "/api/v1/tokens/1",
@@ -560,18 +560,18 @@ class TestAPITokenRevocation:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_api_token_by_id.return_value = {
+        mock_c.get_api_token_by_id = AsyncMock(return_value={
             "status": True,
             "result": {
                 "id": 1,
                 "user_email": "user@test.com"
             }
-        }
+        })
 
-        mock_c.revoke_api_token.return_value = {
+        mock_c.revoke_api_token = AsyncMock(return_value={
             "status": True,
             "result": "Token revoked"
-        }
+        })
 
         response = await client.delete(
             "/api/v1/tokens/1",
@@ -590,13 +590,13 @@ class TestAPITokenRevocation:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_api_token_by_id.return_value = {
+        mock_c.get_api_token_by_id = AsyncMock(return_value={
             "status": True,
             "result": {
                 "id": 1,
                 "user_email": "other@test.com"
             }
-        }
+        })
 
         response = await client.delete(
             "/api/v1/tokens/1",
@@ -614,18 +614,18 @@ class TestAPITokenRevocation:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_api_token_by_id.return_value = {
+        mock_c.get_api_token_by_id = AsyncMock(return_value={
             "status": True,
             "result": {
                 "id": 1,
                 "user_email": "other@test.com"
             }
-        }
+        })
 
-        mock_c.revoke_api_token.return_value = {
+        mock_c.revoke_api_token = AsyncMock(return_value={
             "status": True,
             "result": "Token revoked"
-        }
+        })
 
         response = await client.delete(
             "/api/v1/tokens/1",
@@ -643,10 +643,10 @@ class TestAPITokenRevocation:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_api_token_by_id.return_value = {
+        mock_c.get_api_token_by_id = AsyncMock(return_value={
             "status": False,
             "result": "Token not found"
-        }
+        })
 
         response = await client.delete(
             "/api/v1/tokens/999",
@@ -680,12 +680,12 @@ class TestAPITokenUsageInImport:
 
         mock_c = mock_router_dependencies["connector"]
 
-        mock_c.get_images.return_value = {"status": False}
-        mock_c.insert_image.return_value = {"status": True}
-        mock_c.insert_image_vulnerabilities.return_value = {
+        mock_c.get_images = AsyncMock(return_value={"status": False})
+        mock_c.insert_image = AsyncMock(return_value={"status": True})
+        mock_c.insert_image_vulnerabilities = AsyncMock(return_value={
             "status": True,
             "result": "Imported"
-        }
+        })
 
         response = await client.post(
             "/api/v1/import",

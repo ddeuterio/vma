@@ -12,7 +12,7 @@ Tests cover:
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi import status
 from httpx import AsyncClient, ASGITransport
 
@@ -82,12 +82,12 @@ class TestTeamManagement:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_teams.return_value = {
+        mock_c.get_teams = AsyncMock(return_value={
             "status": True,
             "result": [
                 {"name": "team1", "description": "Team 1"}
             ]
-        }
+        })
 
         response = await client.get(
             "/api/v1/teams",
@@ -111,12 +111,12 @@ class TestTeamManagement:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.get_teams.return_value = {
+            mock_c.get_teams = AsyncMock(return_value={
                 "status": True,
                 "result": [
                     {"name": "team1", "description": "Team 1 Description"}
                 ]
-            }
+            })
 
             response = await client.get(
                 "/api/v1/team/team1",
@@ -158,10 +158,10 @@ class TestTeamManagement:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.insert_teams.return_value = {
+            mock_c.insert_teams = AsyncMock(return_value={
                 "status": True,
                 "result": {"name": "new_team"}
-            }
+            })
 
             response = await client.post(
                 "/api/v1/team",
@@ -207,10 +207,10 @@ class TestTeamManagement:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.delete_team.return_value = {
+            mock_c.delete_team = AsyncMock(return_value={
                 "status": True,
                 "result": {"deleted": 1}
-            }
+            })
 
             response = await client.delete(
                 "/api/v1/team/team1",
@@ -252,13 +252,13 @@ class TestProductManagement:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_products.return_value = {
+        mock_c.get_products = AsyncMock(return_value={
             "status": True,
             "result": [
                 {"id": "prod1", "description": "Product 1", "team": "team1"},
                 {"id": "prod2", "description": "Product 2", "team": "team1"}
             ]
-        }
+        })
 
         response = await client.get(
             "/api/v1/products",
@@ -282,12 +282,12 @@ class TestProductManagement:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.get_products.return_value = {
+            mock_c.get_products = AsyncMock(return_value={
                 "status": True,
                 "result": [
                     {"id": "prod1", "description": "Product 1", "team": "team1"}
                 ]
-            }
+            })
 
             response = await client.get(
                 "/api/v1/product/team1/prod1",
@@ -309,10 +309,10 @@ class TestProductManagement:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.insert_product.return_value = {
+            mock_c.insert_product = AsyncMock(return_value={
                 "status": True,
                 "result": {"id": "new_prod"}
-            }
+            })
 
             response = await client.post(
                 "/api/v1/product",
@@ -392,10 +392,10 @@ class TestProductManagement:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.delete_product.return_value = {
+            mock_c.delete_product = AsyncMock(return_value={
                 "status": True,
                 "result": {"deleted_rows": 1}
-            }
+            })
 
             import json
             response = await client.request(
@@ -420,10 +420,10 @@ class TestProductManagement:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.delete_product.return_value = {
+            mock_c.delete_product = AsyncMock(return_value={
                 "status": True,
                 "result": {"deleted_rows": 1}
-            }
+            })
 
             response = await client.delete(
                 "/api/v1/product/team1/prod1",
@@ -467,7 +467,7 @@ class TestImageManagement:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_images.return_value = {
+        mock_c.get_images = AsyncMock(return_value={
             "status": True,
             "result": [
                 {
@@ -483,7 +483,7 @@ class TestImageManagement:
                     "team": "team1"
                 }
             ]
-        }
+        })
 
         response = await client.get(
             "/api/v1/images",
@@ -507,7 +507,7 @@ class TestImageManagement:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.insert_image.return_value = {
+            mock_c.insert_image = AsyncMock(return_value={
                 "status": True,
                 "result": {
                     "name": "app",
@@ -515,7 +515,7 @@ class TestImageManagement:
                     "product": "prod1",
                     "team": "team1"
                 }
-            }
+            })
 
             response = await client.post(
                 "/api/v1/image",
@@ -599,10 +599,10 @@ class TestImageManagement:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.delete_image.return_value = {
+            mock_c.delete_image = AsyncMock(return_value={
                 "status": True,
                 "result": {"deleted": 1}
-            }
+            })
 
             response = await client.delete(
                 "/api/v1/image/team1/prod1?n=app&ver=1.0",
@@ -623,10 +623,10 @@ class TestImageManagement:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.delete_image.return_value = {
+            mock_c.delete_image = AsyncMock(return_value={
                 "status": True,
                 "result": {"deleted": 3}
-            }
+            })
 
             response = await client.delete(
                 "/api/v1/image/team1/prod1?n=app",
@@ -654,11 +654,11 @@ class TestStatsEndpoint:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_products.return_value = {
+        mock_c.get_products = AsyncMock(return_value={
             "status": True,
             "result": [{"id": "prod1"}, {"id": "prod2"}, {"id": "prod3"}]
-        }
-        mock_c.get_images.return_value = {
+        })
+        mock_c.get_images = AsyncMock(return_value={
             "status": True,
             "result": [
                 {"name": "img1"},
@@ -667,7 +667,7 @@ class TestStatsEndpoint:
                 {"name": "img4"},
                 {"name": "img5"}
             ]
-        }
+        })
 
         response = await client.get(
             "/api/v1/stats",
@@ -688,14 +688,14 @@ class TestStatsEndpoint:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_products.return_value = {
+        mock_c.get_products = AsyncMock(return_value={
             "status": True,
             "result": []
-        }
-        mock_c.get_images.return_value = {
+        })
+        mock_c.get_images = AsyncMock(return_value={
             "status": True,
             "result": []
-        }
+        })
 
         response = await client.get(
             "/api/v1/stats",

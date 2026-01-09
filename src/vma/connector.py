@@ -1,14 +1,12 @@
 import os
-import psycopg2 as psql
 from typing import Optional
 
 from loguru import logger
 from dotenv import load_dotenv
-from psycopg2.extras import execute_values
 from datetime import datetime
 
-# TODO: study asyncpg
-from psycopg2 import pool
+import asyncpg
+from asyncpg import Pool
 
 load_dotenv()
 
@@ -27,7 +25,7 @@ queries = {
         FROM
             nvd_sync
         WHERE
-            id = %s;
+            id = %1;
     """,
     "get_nvd_sync_data": """
         SELECT
@@ -35,7 +33,7 @@ queries = {
         FROM
             nvd_sync
         WHERE
-            id = %s;
+            id = %1;
     """,
     "get_all_years_nvd_sync": """
         SELECT
@@ -47,36 +45,53 @@ queries = {
     """,
     "get_cves": """
         SELECT
-            vulnerabilities.cve_id,
-            vulnerabilities.source_identifier,
-            vulnerabilities.published_date,
-            vulnerabilities.last_modified,
-            vulnerabilities.vuln_status,
-            vulnerabilities.refs,
-            vulnerabilities.descriptions,
-            vulnerabilities.weakness,
-            vulnerabilities.configurations,
-            cvss_metrics.source,
-            cvss_metrics.cvss_version,
-            cvss_metrics.vector_string,
-            cvss_metrics.base_score,
-            cvss_metrics.base_severity
+            v.cve_id,
+            v.source_identifier,
+            v.published_date,
+            v.last_modified,
+            v.vuln_status,
+            v.refs,
+            v.descriptions,
+            v.weakness,
+            v.configurations,
+            COALESCE(
+                json_agg(
+                    json_build_object(
+                        'source', cm.source,
+                        'cvss_version', cm.cvss_version,
+                        'vector_string', cm.vector_string,
+                        'base_score', cm.base_score,
+                        'base_severity', cm.base_severity
+                    ) ORDER BY cm.base_score DESC
+                ) FILTER (WHERE cm.source IS NOT NULL),
+                '[]'::json
+            ) as cvss_metrics
         FROM
-            vulnerabilities
-        INNER JOIN
-            cvss_metrics
+            vulnerabilities v
+        LEFT JOIN
+            cvss_metrics cm
         ON
-            vulnerabilities.cve_id = cvss_metrics.cve_id
+            v.cve_id = cm.cve_id
         WHERE
-            vulnerabilities.cve_id ILIKE %s
+            v.cve_id ILIKE %1
+        GROUP BY
+            v.cve_id,
+            v.source_identifier,
+            v.published_date,
+            v.last_modified,
+            v.vuln_status,
+            v.refs,
+            v.descriptions,
+            v.weakness,
+            v.configurations
         ORDER BY
-            cvss_metrics.base_score DESC
+            v.cve_id DESC
         LIMIT 25;
     """,
     "insert_cve": """
         INSERT INTO vulnerabilities
             (cve_id, source_identifier, published_date, last_modified, vuln_status, refs, descriptions, weakness, configurations)
-        VALUES %s
+        VALUES %1
         ON CONFLICT (cve_id)
         DO UPDATE SET
             cve_id = EXCLUDED.cve_id,
@@ -92,7 +107,7 @@ queries = {
     "insert_cvss": """
         INSERT INTO cvss_metrics
             (cve_id, source, cvss_version, vector_string, base_score, base_severity)
-        VALUES %s
+        VALUES %1
         ON CONFLICT (cve_id, source, cvss_version)
         DO UPDATE SET
             vector_string = EXCLUDED.vector_string,
@@ -102,7 +117,7 @@ queries = {
     "insert_fetch_date": """
         INSERT INTO nvd_sync
             (id, last_fetched, chcksum)
-        VALUES (%s, %s, %s)
+        VALUES (%1, %2, %3)
         ON CONFLICT (id)
         DO UPDATE SET
             last_fetched = EXCLUDED.last_fetched,
@@ -114,7 +129,7 @@ queries = {
         FROM
             products
         WHERE
-            team = ANY(%s)
+            team = ANY(%1)
         ORDER BY
             id;
     """,
@@ -124,8 +139,8 @@ queries = {
         FROM
             products
         WHERE
-            id = %s AND
-            team = ANY(%s)
+            id = %1 AND
+            team = ANY(%2)
         ORDER BY
             id;
     """,
@@ -133,7 +148,7 @@ queries = {
         INSERT INTO
             products (id, description, team)
         VALUES
-            (%s, %s, %s)
+            (%1, %2, %3)
         RETURNING
             id;
     """,
@@ -141,8 +156,8 @@ queries = {
         DELETE FROM
             products
         WHERE
-            id = %s AND
-            team = %s;
+            id = %1 AND
+            team = %2;
     """,
     "get_images": """
         SELECT
@@ -153,7 +168,7 @@ queries = {
         FROM
             images
         WHERE
-            team = ANY(%s)
+            team = ANY(%1)
         ORDER BY
             team,
             product,
@@ -169,8 +184,8 @@ queries = {
         FROM
             images
         WHERE
-            name = %s AND
-            team = ANY(%s)
+            name = %1 AND
+            team = ANY(%2)
         ORDER BY
             product,
             name,
@@ -185,8 +200,8 @@ queries = {
         FROM
             images
         WHERE
-            product = %s AND
-            team = ANY(%s)
+            product = %1 AND
+            team = ANY(%2)
         ORDER BY
             product,
             name,
@@ -201,9 +216,9 @@ queries = {
         FROM
             images
         WHERE
-            name = %s AND
-            product = %s AND
-            team = ANY(%s)
+            name = %1 AND
+            product = %2 AND
+            team = ANY(%3)
         ORDER BY
             product,
             name,
@@ -218,10 +233,10 @@ queries = {
         FROM
             images
         WHERE
-            name = %s AND
-            version = %s AND
-            product = %s AND
-            team = ANY(%s)
+            name = %1 AND
+            version = %2 AND
+            product = %3 AND
+            team = ANY(%4)
         ORDER BY
             product,
             name,
@@ -231,7 +246,7 @@ queries = {
         INSERT INTO
             images (name, version, product, team)
         VALUES
-            (%s, %s, %s, %s)
+            (%1, %2, %3, %4)
         RETURNING
             name, version, product, team;
     """,
@@ -239,18 +254,18 @@ queries = {
         DELETE FROM
             images
         WHERE
-            name = %s AND
-            product = %s AND
-            team = %s;
+            name = %1 AND
+            product = %2 AND
+            team = %3;
     """,
     "delete_image_by_name_version": """
         DELETE FROM
             images
         WHERE
-            name = %s AND
-            version = %s AND
-            product = %s AND
-            team = %s;
+            name = %1 AND
+            version = %2 AND
+            product = %3 AND
+            team = %4;
     """,
     "get_image_vulnerabilities": """
         SELECT
@@ -284,10 +299,10 @@ queries = {
             WHERE rn = 1
         ) cv ON cv.cve_id = iv.cve
         WHERE
-            iv.product = %s
-            AND iv.image_name = %s
-            AND iv.image_version = %s
-            AND iv.team = %s
+            iv.product = %1
+            AND iv.image_name = %2
+            AND iv.image_version = %3
+            AND iv.team = %4
         ORDER BY
             iv.cve,
             iv.affected_component;
@@ -296,7 +311,7 @@ queries = {
         INSERT INTO image_vulnerabilities
             (scanner, image_name, image_version, product, team, cve, fix_versions, first_seen, last_seen, affected_component_type, affected_component, affected_version, affected_path)
         VALUES
-            %s
+            %1
         ON CONFLICT
             (scanner, image_name, image_version, product, team, cve, affected_component_type, affected_component)
         DO UPDATE SET
@@ -310,10 +325,10 @@ queries = {
                 affected_component,
                 affected_path
             FROM image_vulnerabilities
-            WHERE team = %s
-            AND product = %s
-            AND image_name = %s
-            AND image_version = %s
+            WHERE team = %1
+            AND product = %2
+            AND image_name = %3
+            AND image_version = %4
         ),
         image_b AS (
             SELECT DISTINCT
@@ -322,10 +337,10 @@ queries = {
                 affected_component,
                 affected_path
             FROM image_vulnerabilities
-            WHERE team = %s
-            AND product = %s
-            AND image_name = %s
-            AND image_version = %s
+            WHERE team = %1
+            AND product = %2
+            AND image_name = %3
+            AND image_version = %4
         ),
         diff AS (
             SELECT
@@ -376,7 +391,7 @@ queries = {
         FROM
             users
         WHERE
-            email = %s;
+            email = %1;
     """,
     "get_users_by_password": """
         SELECT
@@ -384,8 +399,8 @@ queries = {
         FROM
             users
         WHERE
-            email = %s AND
-            hpass = %s;
+            email = %1 AND
+            hpass = %2;
     """,
     "get_users_by_team": """
         SELECT
@@ -393,20 +408,20 @@ queries = {
         FROM
             users
         WHERE
-            team = %s;
+            team = %1;
     """,
     "insert_users": """
         INSERT INTO
             users (email, hpass, name, is_root)
         VALUES
-            (%s, %s, %s, %s)
+            (%1, %2, %3, %4)
         RETURNING email;
     """,
     "delete_user_by_email": """
         DELETE FROM
             users
         WHERE
-            email = %s;
+            email = %1;
     """,
     "get_teams": """
         SELECT
@@ -420,13 +435,13 @@ queries = {
         FROM
             teams
         WHERE
-            name = %s;
+            name = %1;
     """,
     "insert_teams": """
         INSERT INTO
             teams (name, description)
         VALUES
-            (%s, %s)
+            (%1, %2)
         RETURNING
             name;
     """,
@@ -434,7 +449,7 @@ queries = {
         DELETE FROM
             teams
         WHERE
-            name = %s;
+            name = %1;
     """,
     "get_user_team_scopes": """
         SELECT
@@ -448,13 +463,13 @@ queries = {
         FROM
             user_team_scopes
         WHERE
-            user_email = %s;
+            user_email = %1;
     """,
     "insert_user_team_scopes": """
         INSERT INTO user_team_scopes 
             (user_email, team_id, scope)
         VALUES
-            (%s, %s, %s)
+            (%1, %2, %3)
         ON CONFLICT
             (user_email, team_id)
         DO UPDATE SET
@@ -464,23 +479,23 @@ queries = {
         UPDATE
             user_team_scopes
         SET
-            user_email = %s,
-            team_id = %s,
-            scope = %
+            user_email = %1,
+            team_id = %2,
+            scope = %3
         WHERE
-            user_email = %s;
+            user_email = %4;
     """,
     "delete_user_team_scopes_by_user": """
         DELETE FROM
             user_team_scopes
         WHERE
-            user_email = %s;
+            user_email = %1;
     """,
     "insert_api_token": """
         INSERT INTO
             api_tokens (token_hash, prefix, user_email, description, expires_at)
         VALUES
-            (%s, %s, %s, %s, %s)
+            (%1, %2, %3, %4, %5)
         RETURNING
             id, prefix, created_at;
     """,
@@ -490,7 +505,7 @@ queries = {
         FROM
             api_tokens
         WHERE
-            token_hash = %s;
+            token_hash = %1;
     """,
     "get_api_token_by_prefix": """
         SELECT
@@ -498,7 +513,7 @@ queries = {
         FROM
             api_tokens
         WHERE
-            prefix = %s;
+            prefix = %1;
     """,
     "list_api_tokens_by_user": """
         SELECT
@@ -506,7 +521,7 @@ queries = {
         FROM
             api_tokens
         WHERE
-            user_email = %s AND
+            user_email = %1 AND
             revoked = FALSE
         ORDER BY
             created_at DESC;
@@ -527,8 +542,8 @@ queries = {
         SET
             revoked = TRUE
         WHERE
-            id = %s AND
-            user_email = %s
+            id = %1 AND
+            user_email = %2
         RETURNING id;
     """,
     "revoke_api_token_admin": """
@@ -537,7 +552,7 @@ queries = {
         SET
             revoked = TRUE
         WHERE
-            id = %s
+            id = %1
         RETURNING id;
     """,
     "update_token_last_used": """
@@ -546,7 +561,7 @@ queries = {
         SET
             last_used_at = NOW()
         WHERE
-            id = %s;
+            id = %1;
     """,
     "get_api_token_by_id": """
         SELECT
@@ -554,12 +569,12 @@ queries = {
         FROM
             api_tokens
         WHERE
-            id = %s;
+            id = %1;
     """,
     "insert_osv_vulnerability": """
         INSERT INTO osv_vulnerabilities
             (osv_id, schema_version, modified, published, withdrawn, summary, details, database_specific)
-        VALUES %s
+        VALUES %1
         ON CONFLICT (osv_id)
         DO UPDATE SET
             schema_version = EXCLUDED.schema_version,
@@ -573,41 +588,41 @@ queries = {
     "insert_osv_alias": """
         INSERT INTO osv_aliases
             (osv_id, alias)
-        VALUES %s
+        VALUES %1
         ON CONFLICT (osv_id, alias)
         DO NOTHING;
     """,
     "insert_osv_reference": """
         INSERT INTO osv_references
             (osv_id, ref_type, url)
-        VALUES %s;
+        VALUES %1;
     """,
     "insert_osv_severity": """
         INSERT INTO osv_severity
             (osv_id, severity_type, score)
-        VALUES %s;
+        VALUES %1;
     """,
     "insert_osv_affected": """
         INSERT INTO osv_affected
             (osv_id, package_ecosystem, package_name, package_purl, ranges, versions, ecosystem_specific, database_specific)
-        VALUES %s;
+        VALUES %1;
     """,
     "insert_osv_credit": """
         INSERT INTO osv_credits
             (osv_id, name, contact, credit_type)
-        VALUES %s;
+        VALUES %1;
     """,
     "delete_osv_references": """
-        DELETE FROM osv_references WHERE osv_id = %s;
+        DELETE FROM osv_references WHERE osv_id = %1;
     """,
     "delete_osv_severity": """
-        DELETE FROM osv_severity WHERE osv_id = %s;
+        DELETE FROM osv_severity WHERE osv_id = %1;
     """,
     "delete_osv_affected": """
-        DELETE FROM osv_affected WHERE osv_id = %s;
+        DELETE FROM osv_affected WHERE osv_id = %1;
     """,
     "delete_osv_credits": """
-        DELETE FROM osv_credits WHERE osv_id = %s;
+        DELETE FROM osv_credits WHERE osv_id = %1;
     """,
     "get_osv_by_id": """
         SELECT
@@ -615,7 +630,7 @@ queries = {
         FROM
             osv_vulnerabilities
         WHERE
-            osv_id = %s;
+            osv_id = %1;
     """,
     "get_osvs": """
         SELECT
@@ -627,17 +642,33 @@ queries = {
             v.summary,
             v.details,
             v.database_specific,
-            s.severity_type,
-            s.score
+            COALESCE(
+                json_agg(
+                    json_build_object(
+                        'type', s.severity_type,
+                        'score', s.score
+                    )
+                ) FILTER (WHERE s.severity_type IS NOT NULL),
+                '[]'::json
+            ) as severity
         FROM
             osv_vulnerabilities v
         LEFT JOIN
             osv_severity s ON v.osv_id = s.osv_id
         WHERE
-            v.osv_id ILIKE %s
+            v.osv_id ILIKE %1
+        GROUP BY
+            v.osv_id,
+            v.schema_version,
+            v.modified,
+            v.published,
+            v.withdrawn,
+            v.summary,
+            v.details,
+            v.database_specific
         ORDER BY
             v.osv_id DESC
-        LIMIT 100;
+        LIMIT 25;
     """,
     "get_osv_aliases": """
         SELECT
@@ -645,7 +676,7 @@ queries = {
         FROM
             osv_aliases
         WHERE
-            osv_id = %s;
+            osv_id = %1;
     """,
     "get_osv_by_cve": """
         SELECT
@@ -655,7 +686,7 @@ queries = {
         INNER JOIN
             osv_aliases a ON v.osv_id = a.osv_id
         WHERE
-            a.alias = %s;
+            a.alias = %1;
     """,
     "correlate_nvd_osv": """
         SELECT
@@ -674,214 +705,39 @@ queries = {
         INNER JOIN
             osv_vulnerabilities ov ON oa.osv_id = ov.osv_id
         WHERE
-            nv.cve_id = %s;
-    """,
-    "get_combined_vulnerability_data": """
-        WITH input_vuln AS (
-            -- Determine if input is CVE or OSV ID and get base vulnerability info
-            SELECT
-                v.cve_id,
-                v.source_identifier,
-                v.published_date as nvd_published,
-                v.last_modified as nvd_modified,
-                v.vuln_status,
-                v.refs as nvd_refs,
-                v.descriptions as nvd_descriptions,
-                v.weakness,
-                v.configurations,
-                oa.osv_id
-            FROM vulnerabilities v
-            LEFT JOIN osv_aliases oa ON v.cve_id = oa.alias
-            WHERE v.cve_id = %s
-
-            UNION
-
-            SELECT
-                oa2.alias as cve_id,
-                v2.source_identifier,
-                v2.published_date as nvd_published,
-                v2.last_modified as nvd_modified,
-                v2.vuln_status,
-                v2.refs as nvd_refs,
-                v2.descriptions as nvd_descriptions,
-                v2.weakness,
-                v2.configurations,
-                ov.osv_id
-            FROM osv_vulnerabilities ov
-            LEFT JOIN osv_aliases oa2 ON ov.osv_id = oa2.osv_id AND oa2.alias LIKE 'CVE-%'
-            LEFT JOIN vulnerabilities v2 ON oa2.alias = v2.cve_id
-            WHERE ov.osv_id = %s
-        ),
-        nvd_cvss AS (
-            -- Get all CVSS metrics from NVD
-            SELECT
-                iv.cve_id,
-                json_agg(
-                    json_build_object(
-                        'source', cm.source,
-                        'cvss_version', cm.cvss_version,
-                        'vector_string', cm.vector_string,
-                        'base_score', cm.base_score,
-                        'base_severity', cm.base_severity
-                    ) ORDER BY cm.base_score DESC
-                ) as nvd_cvss_metrics
-            FROM input_vuln iv
-            LEFT JOIN cvss_metrics cm ON iv.cve_id = cm.cve_id
-            WHERE iv.cve_id IS NOT NULL
-            GROUP BY iv.cve_id
-        ),
-        osv_data AS (
-            -- Get OSV vulnerability details
-            SELECT
-                ov.osv_id,
-                ov.schema_version,
-                ov.modified as osv_modified,
-                ov.published as osv_published,
-                ov.withdrawn,
-                ov.summary as osv_summary,
-                ov.details as osv_details,
-                ov.database_specific as osv_database_specific
-            FROM input_vuln iv
-            JOIN osv_vulnerabilities ov ON iv.osv_id = ov.osv_id
-            WHERE iv.osv_id IS NOT NULL
-        ),
-        osv_aliases_agg AS (
-            -- Get all OSV aliases
-            SELECT
-                od.osv_id,
-                json_agg(oa.alias) as osv_aliases
-            FROM osv_data od
-            LEFT JOIN osv_aliases oa ON od.osv_id = oa.osv_id
-            GROUP BY od.osv_id
-        ),
-        osv_severity_agg AS (
-            -- Get OSV severity data
-            SELECT
-                od.osv_id,
-                json_agg(
-                    json_build_object(
-                        'type', os.severity_type,
-                        'score', os.score
-                    )
-                ) as osv_severity
-            FROM osv_data od
-            LEFT JOIN osv_severity os ON od.osv_id = os.osv_id
-            GROUP BY od.osv_id
-        ),
-        osv_refs_agg AS (
-            -- Get OSV references
-            SELECT
-                od.osv_id,
-                json_agg(
-                    json_build_object(
-                        'type', oref.ref_type,
-                        'url', oref.url
-                    )
-                ) as osv_references
-            FROM osv_data od
-            LEFT JOIN osv_references oref ON od.osv_id = oref.osv_id
-            GROUP BY od.osv_id
-        ),
-        osv_affected_agg AS (
-            -- Get OSV affected packages
-            SELECT
-                od.osv_id,
-                json_agg(
-                    json_build_object(
-                        'ecosystem', oaf.package_ecosystem,
-                        'package', oaf.package_name,
-                        'purl', oaf.package_purl,
-                        'ranges', oaf.ranges,
-                        'versions', oaf.versions,
-                        'ecosystem_specific', oaf.ecosystem_specific,
-                        'database_specific', oaf.database_specific
-                    )
-                ) as osv_affected
-            FROM osv_data od
-            LEFT JOIN osv_affected oaf ON od.osv_id = oaf.osv_id
-            GROUP BY od.osv_id
-        ),
-        osv_credits_agg AS (
-            -- Get OSV credits
-            SELECT
-                od.osv_id,
-                json_agg(
-                    json_build_object(
-                        'name', oc.name,
-                        'contact', oc.contact,
-                        'type', oc.credit_type
-                    )
-                ) as osv_credits
-            FROM osv_data od
-            LEFT JOIN osv_credits oc ON od.osv_id = oc.osv_id
-            GROUP BY od.osv_id
-        )
-        -- Final combined result
-        SELECT
-            iv.cve_id,
-            iv.source_identifier,
-            iv.nvd_published,
-            iv.nvd_modified,
-            iv.vuln_status,
-            iv.nvd_refs,
-            iv.nvd_descriptions,
-            iv.weakness,
-            iv.configurations,
-            nc.nvd_cvss_metrics,
-            od.osv_id,
-            od.schema_version,
-            od.osv_published,
-            od.osv_modified,
-            od.withdrawn,
-            od.osv_summary,
-            od.osv_details,
-            od.osv_database_specific,
-            oaa.osv_aliases,
-            osa.osv_severity,
-            ora.osv_references,
-            oafa.osv_affected,
-            oca.osv_credits,
-            CASE
-                WHEN iv.cve_id IS NOT NULL AND od.osv_id IS NOT NULL THEN 'both'
-                WHEN iv.cve_id IS NOT NULL THEN 'nvd_only'
-                WHEN od.osv_id IS NOT NULL THEN 'osv_only'
-                ELSE 'none'
-            END as data_source
-        FROM input_vuln iv
-        LEFT JOIN nvd_cvss nc ON iv.cve_id = nc.cve_id
-        LEFT JOIN osv_data od ON iv.osv_id = od.osv_id
-        LEFT JOIN osv_aliases_agg oaa ON od.osv_id = oaa.osv_id
-        LEFT JOIN osv_severity_agg osa ON od.osv_id = osa.osv_id
-        LEFT JOIN osv_refs_agg ora ON od.osv_id = ora.osv_id
-        LEFT JOIN osv_affected_agg oafa ON od.osv_id = oafa.osv_id
-        LEFT JOIN osv_credits_agg oca ON od.osv_id = oca.osv_id
-        LIMIT 1;
+            nv.cve_id = %1;
     """,
 }
 
 _conn_pool = None
 
 
-def get_conn():
+async def create_pool() -> Pool:
+    return await asyncpg.create_pool(
+        host=_db_host,
+        database=_db_name,
+        user=_db_user,
+        password=_db_pass,
+        min_size=_min_conn,
+        max_size=_max_conn,
+    )
+
+
+async def get_pool():
     global _conn_pool
     if _conn_pool is None:
-        _conn_pool = pool.SimpleConnectionPool(
-            minconn=_min_conn,
-            maxconn=_max_conn,
-            host=_db_host,
-            dbname=_db_name,
-            user=_db_user,
-            password=_db_pass,
-        )
-    return _conn_pool.getconn()
+        _conn_pool = await create_pool()
+    return _conn_pool
 
 
-def put_conn(conn, close=False):
+async def close_pool():
+    global _conn_pool
     if _conn_pool is not None:
-        _conn_pool.putconn(conn, close=close)
+        await _conn_pool.close()
+        _conn_pool = None
 
 
-def get_all_years_nvd_sync() -> list | None:
+async def get_all_years_nvd_sync() -> list:
     """
     Gets the date (extended ISO-8601 date/time format) of the last time that the database was updated for all years.
 
@@ -889,47 +745,41 @@ def get_all_years_nvd_sync() -> list | None:
         Date of the last time that the vulnerabilities where updated
     """
     dt = None
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["get_nvd_sync_data"])
-            dt = cur.fetchall()
+        async with pool.acquire() as conn:
+            dt = await conn.fetch(queries["get_all_years_nvd_sync"])
             logger.debug("All years gotten from the nvd_sync table")
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
     except Exception as e:
         logger.error(f"DB error: {e}")
-    finally:
-        put_conn(conn)
 
-    res = [i[0] for i in dt] if dt else None
+    res = [i[0] for i in dt] if dt else []
     return res
 
 
-def get_nvd_sync_data(year) -> tuple | None:
+async def get_nvd_sync_data(year) -> tuple:
     """
     Gets the date (extended ISO-8601 date/time format) of the last time that the database was updated.
 
     Returns:
         Date of the last time that the vulnerabilities where updated
     """
-    dt = None
-    conn = get_conn()
+    dt = ()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["get_nvd_sync_data"], year)
-            dt = cur.fetchone()
+        async with pool.acquire() as conn:
+            dt = await conn.fetchrow(queries["get_nvd_sync_data"], year)
             logger.debug(f"Last date when {year} CVE data was updated was {dt}")
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
     except Exception as e:
         logger.error(f"DB error: {e}")
-    finally:
-        put_conn(conn)
     return dt
 
 
-def get_last_fetched_date(year) -> datetime | None:
+async def get_last_fetched_date(year) -> datetime | None:
     """
     Gets the date (extended ISO-8601 date/time format) of the last time that the database was updated.
 
@@ -940,27 +790,24 @@ def get_last_fetched_date(year) -> datetime | None:
         datetime object of last fetch, or None if no sync record exists
     """
     dt = None
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["get_fetch_date"], (year,))
-            dt = cur.fetchone()
+        async with pool.acquire() as conn:
+            dt = await conn.fetchrow(queries["get_fetch_date"], year)
             if dt:
                 logger.debug(f"Last date when CVE data was updated was {dt[0]}")
             else:
                 logger.debug("Couldn't fecth the update date")
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
     except Exception as e:
         logger.error(f"DB error: {e}")
-    finally:
-        put_conn(conn)
 
     res = datetime.fromisoformat(dt[0]).astimezone() if dt else None
     return res
 
 
-def insert_year_data(value) -> bool:
+async def insert_year_data(value) -> bool:
     """
     Update the date of the last fetched value (extended ISO-8601 date/time format)
 
@@ -970,24 +817,21 @@ def insert_year_data(value) -> bool:
         Boolean with the result of the query
     """
     res = True
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["insert_fetch_date"], value)
-            conn.commit()
+        async with pool.acquire() as conn:
+            await conn.execute(queries["insert_fetch_date"], value)
             logger.debug(f"Last fetched date was updated to {str(value)}")
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = False
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = False
-    finally:
-        put_conn(conn)
     return res
 
 
-def insert_vulnerabilities(data_cve: list, data_cvss: list) -> dict:
+async def insert_vulnerabilities(data_cve: list, data_cvss: list) -> dict:
     """
     Inserts bulk data into the DB
 
@@ -998,98 +842,75 @@ def insert_vulnerabilities(data_cve: list, data_cvss: list) -> dict:
         dict structure with 'status' and 'result'
     """
     res = True
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            execute_values(cur, queries["insert_cve"], data_cve, page_size=_page_size)
-            conn.commit()
-            execute_values(cur, queries["insert_cvss"], data_cvss, page_size=_page_size)
-            conn.commit()
-    except psql.Error as e:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.executemany(queries["insert_cve"], data_cve)
+                await conn.executemany(queries["insert_cvss"], data_cvss)
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = False
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = False
-    finally:
-        put_conn(conn)
     return {"status": res, "result": {"num_cve": len(data_cve)}}
 
 
-def get_vulnerabilities_by_id(id: str) -> dict:
+async def get_vulnerabilities_by_id(id: str) -> dict:
     """
-    Get the vulnerabilities based on the cve id pattern
+    Get vulnerabilities based on CVE ID pattern.
+
+    Returns unique results per CVE with aggregated CVSS metrics from all sources.
 
     Args:
-        id: cve id pattern
+        id: CVE ID pattern (e.g., "CVE-2025-9951", "CVE-2025-%", "2025")
+            Supports SQL ILIKE pattern matching
 
     Returns:
         dict structure with 'status' and 'result'
+        result is a dict keyed by cve_id containing vulnerability details
+        with cvss_metrics as a JSON array of all scores from different sources
     """
     res = {"status": True, "result": {}}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["get_cves"], (id,))
-            aux = cur.fetchall()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(queries["get_cves"], id)
 
-        logger.debug(
-            f"A total of {len(aux)} vulnerabilities have been found for the filter {id}"
-        )
-
-        for vuln in aux:
-            cve_id = vuln[0]
-            source_identifier = vuln[1]
-            published_date = str(vuln[2])
-            last_modified = str(vuln[3])
-            status = vuln[4]
-            refs = vuln[5]
-            descriptions = vuln[6]
-            weakness = vuln[7]
-            configs = vuln[8]
-            cvss_source = vuln[9]
-            cvss_version = vuln[10]
-            cvss_vs = vuln[11]
-            cvss_bscore = vuln[12]
-            cvss_bsev = vuln[13]
-
-            if cve_id not in res["result"]:
-                res["result"][cve_id] = {
-                    "source": source_identifier,
-                    "published_date": published_date,
-                    "last_modified": last_modified,
-                    "status": status,
-                    "references": refs,
-                    "descriptions": descriptions,
-                    "weakness": weakness,
-                    "configurations": configs,
-                    "cvss": {},
-                }
-
-            if cvss_version not in res["result"][cve_id]["cvss"]:
-                res["result"][cve_id]["cvss"][cvss_version] = []
-            res["result"][cve_id]["cvss"][cvss_version].append(
-                {
-                    "source": cvss_source,
-                    "vector_string": cvss_vs,
-                    "base_score": cvss_bscore,
-                    "base_severity": cvss_bsev,
-                }
-            )
-        if not res["result"]:
+        if not rows:
+            logger.debug(f"No vulnerabilities found matching pattern: {id}")
             res["status"] = False
-    except psql.Error as e:
+            return res
+
+        logger.debug(f"Found {len(rows)} unique vulnerabilities for pattern: {id}")
+
+        # Each row is now unique per CVE (GROUP BY in query)
+        # CVSS metrics are JSON-aggregated in row[9]
+        for row in rows:
+            cve_id = row[0]
+            res["result"][cve_id] = {
+                "source": row[1],
+                "published_date": str(row[2]),
+                "last_modified": str(row[3]),
+                "status": row[4],
+                "references": row[5],
+                "descriptions": row[6],
+                "weakness": row[7],
+                "configurations": row[8],
+                "cvss_metrics": row[9],  # Already JSON-aggregated by query
+            }
+
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def get_products(teams: list, id: Optional[str] = None) -> dict:
+async def get_products(teams: list, id: Optional[str] = None) -> dict:
     """
     Retrieve products.
 
@@ -1100,32 +921,29 @@ def get_products(teams: list, id: Optional[str] = None) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": []}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
+        async with pool.acquire() as conn:
             if id:
-                cur.execute(queries["get_product"], (id, teams))
+                q = await conn.fetch(queries["get_product"], id, teams)
             else:
-                cur.execute(queries["get_products"], (teams,))
-            q = cur.fetchall()
+                q = await conn.fetch(queries["get_products"], teams)
 
         if not q:
             res["status"] = False
         else:
             for p in q:
                 res["result"].append({"id": p[0], "description": p[1], "team": p[2]})
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def insert_product(name: str, description: str, team: str) -> dict:
+async def insert_product(name: str, description: str, team: str) -> dict:
     """
     Inserts a new product
 
@@ -1138,12 +956,10 @@ def insert_product(name: str, description: str, team: str) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["insert_product"], (name, description, team))
-            q = cur.fetchone()
-            conn.commit()
+        async with pool.acquire() as conn:
+            q = await conn.fetchrow(queries["insert_product"], name, description, team)
 
         if q:
             res["result"] = {"id": q[0]}
@@ -1151,18 +967,16 @@ def insert_product(name: str, description: str, team: str) -> dict:
         else:
             res["status"] = False
             logger.debug("Failed creating the product")
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def delete_product(id: str, team: str) -> dict:
+async def delete_product(id: str, team: str) -> dict:
     """
     Delete a product
 
@@ -1174,26 +988,24 @@ def delete_product(id: str, team: str) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["delete_product"], (id, team))
-            if not cur.rowcount:
+        async with pool.acquire() as conn:
+            q = await conn.execute(queries["delete_product"], id, team)
+            if not q.rowcount:
                 res["status"] = False
             else:
-                res["result"] = {"deleted_rows": cur.rowcount}
-    except psql.Error as e:
+                res["result"] = {"deleted_rows": q.rowcount}
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def get_images(
+async def get_images(
     teams: list,
     name: Optional[str] = None,
     version: Optional[str] = None,
@@ -1212,23 +1024,25 @@ def get_images(
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": []}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
+        async with pool.acquire() as conn:
             if product and name and version:
-                cur.execute(
+                q = await conn.fetch(
                     queries["get_images_by_name_version_product"],
-                    (name, version, product, teams),
+                    name,
+                    version,
+                    product,
+                    teams,
                 )
             elif product and name:
-                cur.execute(
-                    queries["get_images_by_name_product"], (name, product, teams)
+                q = await conn.fetch(
+                    queries["get_images_by_name_product"], name, product, teams
                 )
             elif product:
-                cur.execute(queries["get_images_by_product"], (product, teams))
+                q = await conn.fetch(queries["get_images_by_product"], product, teams)
             else:
-                cur.execute(queries["get_images"], (teams,))
-            q = cur.fetchall()
+                q = await conn.fetch(queries["get_images"], teams)
 
         if not q:
             logger.debug("No images were found")
@@ -1243,18 +1057,16 @@ def get_images(
                         "team": im[3],
                     }
                 )
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def insert_image(name: str, version: str, product: str, team: str) -> dict:
+async def insert_image(name: str, version: str, product: str, team: str) -> dict:
     """
     Inserts a new image
 
@@ -1267,12 +1079,12 @@ def insert_image(name: str, version: str, product: str, team: str) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": {}}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["insert_image"], (name, version, product, team))
-            q = cur.fetchone()
-            conn.commit()
+        async with pool.acquire() as conn:
+            q = await conn.fetchrow(
+                queries["insert_image"], name, version, product, team
+            )
 
         if not q:
             res["status"] = False
@@ -1285,18 +1097,18 @@ def insert_image(name: str, version: str, product: str, team: str) -> dict:
                 "team": q[3],
             }
             logger.debug(f"New image with name {q[0]} was created")
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def get_image_vulnerabilities(product: str, name: str, version: str, team: str) -> dict:
+async def get_image_vulnerabilities(
+    product: str, name: str, version: str, team: str
+) -> dict:
     """
     Get the vulnerabilities associated to an image
 
@@ -1309,30 +1121,27 @@ def get_image_vulnerabilities(product: str, name: str, version: str, team: str) 
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                queries["get_image_vulnerabilities"], (product, name, version, team)
+        async with pool.acquire() as conn:
+            q = await conn.fetch(
+                queries["get_image_vulnerabilities"], product, name, version, team
             )
-            q = cur.fetchall()
 
         res["result"] = q
         logger.debug(
             f"A total of {len(q)} vulns for image {team}/{product} {name}:{version}"
         )
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def insert_image_vulnerabilities(values: list) -> dict:
+async def insert_image_vulnerabilities(values: list) -> dict:
     """
     Bind a vulnerability with an image
 
@@ -1353,31 +1162,24 @@ def insert_image_vulnerabilities(values: list) -> dict:
     Returns:
         dict structure with 'status' and 'result'
     """
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            execute_values(
-                cur,
-                queries["insert_image_vulnerabilities"],
-                values,
-                page_size=_page_size,
-            )
-            conn.commit()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.executemany(queries["insert_image_vulnerabilities"], values)
 
         logger.debug(f"A total of {len(values)} have been inserted")
         res = {"status": True, "result": {"num_cve": len(values)}}
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def compare_image_versions(
+async def compare_image_versions(
     product: str, image: str, version_a: str, version_b: str, team: str
 ) -> dict:
     """
@@ -1393,32 +1195,35 @@ def compare_image_versions(
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(
+        async with pool.acquire() as conn:
+            q = await conn.fetch(
                 queries["compare_image_versions"],
-                (team, product, image, version_a, product, image, version_b),
+                team,
+                product,
+                image,
+                version_a,
+                product,
+                image,
+                version_b,
             )
-            q = cur.fetchall()
 
         if not q:
             res["status"] = False
         else:
             res["result"] = q
         logger.debug("Data from the two versions gotten")
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def delete_image(team, product, name=None, version=None) -> dict:
+async def delete_image(team, product, name=None, version=None) -> dict:
     """
     Deletes images
 
@@ -1433,36 +1238,41 @@ def delete_image(team, product, name=None, version=None) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
+        async with pool.acquire() as conn:
+            q = None
             if version and name:
-                cur.execute(
+                q = await conn.execute(
                     queries["delete_image_by_name_version"],
-                    (name, version, product, team),
+                    name,
+                    version,
+                    product,
+                    team,
                 )
             elif name:
-                cur.execute(queries["delete_image_by_name"], (name, product, team))
-            if not cur.rowcount:
+                q = await conn.execute(
+                    queries["delete_image_by_name"], name, product, team
+                )
+
+            if not q or q.rowcount < 1:
                 logger.error(
                     f"Image could not be deleted properly {name} {product} {team}"
                 )
                 res["status"] = False
             else:
                 logger.debug(f"Image was deleted properly {name} {product} {team}")
-                res["result"] = {"deleted_rows": cur.rowcount}
-    except psql.Error as e:
+                res["result"] = {"deleted_rows": q.rowcount}
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def get_users(email=None) -> dict:
+async def get_users(email=None) -> dict:
     """
     Retrieve users.
 
@@ -1472,14 +1282,13 @@ def get_users(email=None) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": []}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
+        async with pool.acquire() as conn:
             if email:
-                cur.execute(queries["get_users_by_email"], (email,))
+                q = await conn.fetch(queries["get_users_by_email"], email)
             else:
-                cur.execute(queries["get_users"])
-            q = cur.fetchall()
+                q = await conn.fetch(queries["get_users"])
             if not q:
                 res["status"] = False
                 logger.debug(
@@ -1495,10 +1304,11 @@ def get_users(email=None) -> dict:
                         "scope": {},
                     }
                 if email:
-                    cur.execute(queries["get_user_team_scopes_by_email"], (email,))
+                    q = await conn.fetch(
+                        queries["get_user_team_scopes_by_email"], email
+                    )
                 else:
-                    cur.execute(queries["get_user_team_scopes"])
-                q = cur.fetchall()
+                    q = await conn.fetch(queries["get_user_team_scopes"])
                 if not q:
                     logger.debug(
                         f"Did not found any scope with the given parameters: {email}"
@@ -1516,18 +1326,16 @@ def get_users(email=None) -> dict:
                             "scope": v["scope"],
                         }
                         res["result"].append(aux)
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def get_users_w_hpass(email) -> dict:
+async def get_users_w_hpass(email) -> dict:
     """
     Retrieve users.
 
@@ -1537,11 +1345,10 @@ def get_users_w_hpass(email) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": []}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["get_users_by_email"], (email,))
-            q = cur.fetchall()
+        async with pool.acquire() as conn:
+            q = await conn.fetch(queries["get_users_by_email"], email)
             if not q:
                 res["status"] = False
                 logger.debug(
@@ -1557,8 +1364,7 @@ def get_users_w_hpass(email) -> dict:
                         "is_root": usr[3],
                         "scope": {},
                     }
-                cur.execute(queries["get_user_team_scopes_by_email"], (email,))
-                q = cur.fetchall()
+                q = await conn.fetch(queries["get_user_team_scopes_by_email"], email)
                 if not q:
                     logger.debug(
                         f"Did not found any scope with the given parameters: {email}"
@@ -1577,18 +1383,16 @@ def get_users_w_hpass(email) -> dict:
                             "scope": v["scope"],
                         }
                         res["result"].append(aux)
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def insert_users(email, password, name, scopes, is_root=False) -> dict:
+async def insert_users(email, password, name, scopes, is_root=False) -> dict:
     """
     Insert an user
 
@@ -1600,28 +1404,27 @@ def insert_users(email, password, name, scopes, is_root=False) -> dict:
     Returns:
         dict structure with 'status' and 'result'
     """
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["insert_users"], (email, password, name, is_root))
+        async with pool.acquire() as conn:
+            await conn.execute(queries["insert_users"], email, password, name, is_root)
             for t, s in scopes.items():
-                cur.execute(queries["insert_user_team_scopes"], (email, t, s))
-            conn.commit()
+                await conn.execute(queries["insert_user_team_scopes"], email, t, s)
 
         logger.debug(f"A new user {email} has been added")
         res = {"status": True, "result": {"user": email}}
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def update_users(email, password=None, name=None, scopes=None, is_root=None) -> dict:
+async def update_users(
+    email, password=None, name=None, scopes=None, is_root=None
+) -> dict:
     """
     Update an user
 
@@ -1633,17 +1436,19 @@ def update_users(email, password=None, name=None, scopes=None, is_root=None) -> 
     Returns:
         dict structure with 'status' and 'result'
     """
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            res = get_users(email)
+        async with pool.acquire() as conn:
+            res = await get_users(email)
             original_email = res["result"][0]["email"] if res["status"] else ""
             logger.debug(f"original email is {original_email}")
             update_fields = []
             fields = []
 
             if original_email != email:
-                update_fields.append("email = %s")
+                update_fields.append(
+                    "email = %s"
+                )  # TODO: look how to include the order here
                 fields.append(email)
 
             if password:
@@ -1663,27 +1468,27 @@ def update_users(email, password=None, name=None, scopes=None, is_root=None) -> 
                 q = f"""
                     UPDATE users SET {(", ").join(update_fields)} WHERE email = %s;
                 """
-                cur.execute(q, tuple(fields))
+                await conn.execute(
+                    q, tuple(fields)
+                )  # TODO: fix the tuples, should be field by param
 
             if scopes:
                 logger.debug("updating scopes")
                 for t, s in scopes.items():
                     logger.debug(f"team: {t}; scope: {s}")
-                    cur.execute(queries["insert_user_team_scopes"], (email, t, s))
-            conn.commit()
+                    await conn.execute(queries["insert_user_team_scopes"], email, t, s)
+
         logger.debug(f"A user {email} has been updated")
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return {"status": True, "result": {"user": email}}
 
 
-def delete_user(email) -> dict:
+async def delete_user(email) -> dict:
     """
     Deletes user
 
@@ -1694,26 +1499,24 @@ def delete_user(email) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["delete_user_by_email"], (email))
-            if not cur.rowcount:
+        async with pool.acquire() as conn:
+            q = await conn.execute(queries["delete_user_by_email"], email)
+            if not q.rowcount:
                 res["status"] = False
             else:
-                res["result"] = {"deleted_rows": cur.rowcount}
-    except psql.Error as e:
+                res["result"] = {"deleted_rows": q.rowcount}
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def get_teams(name=None) -> dict:
+async def get_teams(name=None) -> dict:
     """
     Retrieve teams.
 
@@ -1723,14 +1526,13 @@ def get_teams(name=None) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": []}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
+        async with pool.acquire() as conn:
             if name:
-                cur.execute(queries["get_teams_by_name"], (name,))
+                q = await conn.fetch(queries["get_teams_by_name"], name)
             else:
-                cur.execute(queries["get_teams"])
-            q = cur.fetchall()
+                q = await conn.fetch(queries["get_teams"])
 
         if not q:
             logger.debug("No teams where identified")
@@ -1738,18 +1540,16 @@ def get_teams(name=None) -> dict:
             logger.debug(f"A total of {len(q)} teams were identified")
             for t in q:
                 res["result"].append({"name": t[0], "description": t[1]})
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def insert_teams(name: str, description: str = "") -> dict:
+async def insert_teams(name: str, description: str = "") -> dict:
     """
     Insert a team
 
@@ -1760,12 +1560,10 @@ def insert_teams(name: str, description: str = "") -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["insert_teams"], (name, description))
-            conn.commit()
-            q = cur.fetchone()
+        async with pool.acquire() as conn:
+            q = await conn.fetchrow(queries["insert_teams"], name, description)
 
         if q:
             res["result"] = {}
@@ -1773,18 +1571,16 @@ def insert_teams(name: str, description: str = "") -> dict:
             logger.debug(f"A new team with name {q} has been added")
         else:
             logger.debug("Failed adding the team")
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res["result"] = False
     except Exception as e:
         logger.error(f"DB error: {e}")
         res["result"] = False
-    finally:
-        put_conn(conn)
     return res
 
 
-def delete_team(id) -> dict:
+async def delete_team(id) -> dict:
     """
     Deletes a team
 
@@ -1795,62 +1591,53 @@ def delete_team(id) -> dict:
         dict structure with 'status' and 'result'
     """
     res = {"status": True, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["delete_teams"], (id,))
-            if not cur.rowcount:
+        async with pool.acquire() as conn:
+            q = await conn.execute(queries["delete_teams"], id)
+            if not q.rowcount:
                 logger.error(f"Team with id {id} could not be removed")
                 res["status"] = False
             else:
                 logger.debug(f"Team with id {id} was removed")
-                res["result"] = {"deleted_rows": cur.rowcount}
-    except psql.Error as e:
+                res["result"] = {"deleted_rows": q.rowcount}
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def get_scope_by_user(email=None) -> dict:
-    conn = get_conn()
+async def get_scope_by_user(email=None) -> dict:
+    pool = await get_pool()
     res = {"status": True, "result": None}
     try:
-        with conn.cursor() as cur:
+        async with pool.acquire() as conn:
             if email:
-                cur.execute(queries["get_user_team_scopes_by_email"], (email,))
+                q = await conn.fetch(queries["get_user_team_scopes_by_email"], email)
             else:
-                cur.execute(queries["get_user_team_scopes"])
+                q = await conn.fetch(queries["get_user_team_scopes"])
 
-            if not cur.rowcount:
+            if not q:
                 logger.error("Scopes for users could not be identified")
                 res["status"] = False
             else:
-                q = cur.fetchall()
-                if not q:
-                    logger.error("Scopes for users could not be identified")
-                    res["status"] = False
-                else:
-                    logger.debug("Scopes for users were identified")
-                    res["result"] = {}
-                    for r in q:
-                        res["result"][r[1]] = r[2]
-    except psql.Error as e:
+                logger.debug("Scopes for users were identified")
+                res["result"] = {}
+                for r in q:
+                    res["result"][r[1]] = r[2]
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
     except Exception as e:
         logger.error(f"DB error: {e}")
         res = {"status": False, "result": None}
-    finally:
-        put_conn(conn)
     return res
 
 
-def insert_api_token(
+async def insert_api_token(
     token_hash: str,
     prefix: str,
     user_email: str,
@@ -1872,15 +1659,17 @@ def insert_api_token(
         dict: {"status": bool, "result": {id, prefix, created_at} or error}
     """
     res = {"status": False, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(
+        async with pool.acquire() as conn:
+            q = await conn.fetchrow(
                 queries["insert_api_token"],
-                (token_hash, prefix, user_email, description, expires_at),
+                token_hash,
+                prefix,
+                user_email,
+                description,
+                expires_at,
             )
-            q = cur.fetchone()
-            conn.commit()
 
         if not q:
             raise Exception("API token could not be created")
@@ -1893,12 +1682,10 @@ def insert_api_token(
     except Exception as e:
         logger.error(f"Error inserting API token: {e}")
         res["result"] = str(e)
-    finally:
-        put_conn(conn)
     return res
 
 
-def get_api_token_by_hash(token_hash: str) -> dict:
+async def get_api_token_by_hash(token_hash: str) -> dict:
     """
     Get API token by hash for validation.
 
@@ -1909,11 +1696,10 @@ def get_api_token_by_hash(token_hash: str) -> dict:
         dict: {"status": bool, "result": token_data or error}
     """
     res = {"status": False, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["get_api_token_by_hash"], (token_hash,))
-            q = cur.fetchone()
+        async with pool.acquire() as conn:
+            q = await conn.fetch(queries["get_api_token_by_hash"], token_hash)
 
         if not q:
             logger.debug("Token not found")
@@ -1934,12 +1720,10 @@ def get_api_token_by_hash(token_hash: str) -> dict:
     except Exception as e:
         logger.error(f"Error getting API token: {e}")
         res["result"] = str(e)
-    finally:
-        put_conn(conn)
     return res
 
 
-def get_api_token_by_prefix(prefix: str) -> dict:
+async def get_api_token_by_prefix(prefix: str) -> dict:
     """
     Get API token by prefix for validation.
 
@@ -1950,11 +1734,10 @@ def get_api_token_by_prefix(prefix: str) -> dict:
         dict: {"status": bool, "result": token_data or error}
     """
     res = {"status": False, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["get_api_token_by_prefix"], (prefix,))
-            q = cur.fetchone()
+        async with pool.acquire() as conn:
+            q = await conn.fetch(queries["get_api_token_by_prefix"], prefix)
 
         if not q:
             logger.debug("Token not found")
@@ -1975,19 +1758,16 @@ def get_api_token_by_prefix(prefix: str) -> dict:
     except Exception as e:
         logger.error(f"Error getting API token by prefix: {e}")
         res["result"] = str(e)
-    finally:
-        put_conn(conn)
     return res
 
 
-def get_api_token_by_id(token_id: int) -> dict:
+async def get_api_token_by_id(token_id: int) -> dict:
     """Get API token by ID."""
     res = {"status": False, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["get_api_token_by_id"], (token_id,))
-            q = cur.fetchone()
+        async with pool.acquire() as conn:
+            q = await conn.fetch(queries["get_api_token_by_id"], token_id)
 
         if not q:
             logger.debug("Token not found")
@@ -2011,12 +1791,10 @@ def get_api_token_by_id(token_id: int) -> dict:
     except Exception as e:
         logger.error(f"Error getting API token: {e}")
         res["result"] = str(e)
-    finally:
-        put_conn(conn)
     return res
 
 
-def list_api_tokens(user_email: Optional[str] = None) -> dict:
+async def list_api_tokens(user_email: Optional[str] = None) -> dict:
     """
     List API tokens.
 
@@ -2027,15 +1805,13 @@ def list_api_tokens(user_email: Optional[str] = None) -> dict:
         dict: {"status": bool, "result": list of tokens or error}
     """
     res = {"status": False, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
+        async with pool.acquire() as conn:
             if not user_email:
-                cur.execute(queries["list_all_api_tokens"])
+                q = await conn.fetch(queries["list_all_api_tokens"])
             else:
-                cur.execute(queries["list_api_tokens_by_user"], (user_email,))
-
-            q = cur.fetchall()
+                q = await conn.fetch(queries["list_api_tokens_by_user"], user_email)
 
         if q:
             tokens = []
@@ -2061,12 +1837,10 @@ def list_api_tokens(user_email: Optional[str] = None) -> dict:
     except Exception as e:
         logger.error(f"Error getting API token: {e}")
         res["result"] = "Could not fetch tokens"
-    finally:
-        put_conn(conn)
     return res
 
 
-def revoke_api_token(
+async def revoke_api_token(
     token_id: int, user_email: Optional[str] = None, admin: bool = False
 ) -> dict:
     """
@@ -2081,16 +1855,15 @@ def revoke_api_token(
         dict: {"status": bool, "result": success message or error}
     """
     res = {"status": False, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
+        async with pool.acquire() as conn:
             if admin:
-                cur.execute(queries["revoke_api_token_admin"], (token_id,))
+                q = await conn.fetchrow(queries["revoke_api_token_admin"], token_id)
             else:
-                cur.execute(queries["revoke_api_token"], (token_id, user_email))
-
-            q = cur.fetchone()
-            conn.commit()
+                q = await conn.fetchrow(
+                    queries["revoke_api_token"], token_id, user_email
+                )
 
         if not q:
             logger.error("Token could not be revoked")
@@ -2102,12 +1875,10 @@ def revoke_api_token(
     except Exception as e:
         logger.error(f"Error getting API token: {e}")
         res["result"] = str(e)
-    finally:
-        put_conn(conn)
     return res
 
 
-def update_token_last_used(token_id: int) -> dict:
+async def update_token_last_used(token_id: int) -> dict:
     """
     Update last_used_at timestamp for a token.
 
@@ -2118,23 +1889,20 @@ def update_token_last_used(token_id: int) -> dict:
         dict: {"status": bool}
     """
     res = {"status": False, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["update_token_last_used"], (token_id,))
-            conn.commit()
+        async with pool.acquire() as conn:
+            await conn.execute(queries["update_token_last_used"], token_id)
 
         res["status"] = True
         res["result"] = "Token updated successfully"
     except Exception as e:
         logger.error(f"Error getting API token: {e}")
         res["result"] = str(e)
-    finally:
-        put_conn(conn)
     return res
 
 
-def insert_osv_data(
+async def insert_osv_data(
     data_vuln: list,
     data_aliases: list,
     data_refs: list,
@@ -2164,61 +1932,60 @@ def insert_osv_data(
     """
     res = True
     osv_id = data_vuln[0][0] if data_vuln else None
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            # Insert main vulnerability record
+        async with pool.acquire() as conn:
             if data_vuln:
-                execute_values(cur, queries["insert_osv_vulnerability"], data_vuln)
-                conn.commit()
+                async with conn.transaction():
+                    await conn.executemany(
+                        queries["insert_osv_vulnerability"], data_vuln
+                    )
 
-            # Insert aliases (including CVE mappings for NVD correlation)
             if data_aliases:
-                execute_values(cur, queries["insert_osv_alias"], data_aliases)
-                conn.commit()
+                async with conn.transaction():
+                    await conn.executemany(queries["insert_osv_alias"], data_aliases)
 
             # For updates, delete existing child records and re-insert
             # This ensures data consistency when OSV entries are updated
             if osv_id:
-                cur.execute(queries["delete_osv_references"], (osv_id,))
-                cur.execute(queries["delete_osv_severity"], (osv_id,))
-                cur.execute(queries["delete_osv_affected"], (osv_id,))
-                cur.execute(queries["delete_osv_credits"], (osv_id,))
-                conn.commit()
+                await conn.execute(queries["delete_osv_references"], osv_id)
+                await conn.execute(queries["delete_osv_severity"], osv_id)
+                await conn.execute(queries["delete_osv_affected"], osv_id)
+                await conn.execute(queries["delete_osv_credits"], osv_id)
 
             # Insert child records
             if data_refs:
-                execute_values(cur, queries["insert_osv_reference"], data_refs)
-                conn.commit()
+                async with conn.transaction():
+                    await conn.executemany(queries["insert_osv_reference"], data_refs)
 
             if data_severity:
-                execute_values(cur, queries["insert_osv_severity"], data_severity)
-                conn.commit()
+                async with conn.transaction():
+                    await conn.execute(queries["insert_osv_severity"], data_severity)
 
             if data_affected:
-                execute_values(cur, queries["insert_osv_affected"], data_affected)
-                conn.commit()
+                async with conn.transaction():
+                    await conn.executemany(
+                        queries["insert_osv_affected"], data_affected
+                    )
 
             if data_credits:
-                execute_values(cur, queries["insert_osv_credit"], data_credits)
-                conn.commit()
+                async with conn.transaction():
+                    await conn.executemany(queries["insert_osv_credit"], data_credits)
 
             logger.info(
                 f"Inserted OSV {osv_id}: {len(data_aliases)} aliases, {len(data_refs)} refs, "
                 f"{len(data_severity)} severity, {len(data_affected)} affected, {len(data_credits)} credits"
             )
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error inserting OSV data: {e}")
         res = False
     except Exception as e:
         logger.error(f"Error inserting OSV data: {e}")
         res = False
-    finally:
-        put_conn(conn)
     return {"status": res, "result": {"osv_id": osv_id}}
 
 
-def get_osv_by_id(osv_id: str) -> dict:
+async def get_osv_by_id(osv_id: str) -> dict:
     """
     Get OSV vulnerability by OSV ID.
 
@@ -2230,11 +1997,10 @@ def get_osv_by_id(osv_id: str) -> dict:
         result contains: {osv_id, schema_version, modified, published, withdrawn, summary, details, database_specific}
     """
     res = {"status": False, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["get_osv_by_id"], (osv_id,))
-            q = cur.fetchone()
+        async with pool.acquire() as conn:
+            q = await conn.fetchrow(queries["get_osv_by_id"], osv_id)
 
         if not q:
             logger.debug(f"OSV {osv_id} not found in database")
@@ -2253,174 +2019,69 @@ def get_osv_by_id(osv_id: str) -> dict:
                 "database_specific": q[7],
             }
             logger.debug(f"Found OSV {osv_id} in database")
-    except psql.Error as e:
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error getting OSV: {e}")
         res["status"] = False
     except Exception as e:
         logger.error(f"Error getting OSV: {e}")
         res["status"] = False
-    finally:
-        put_conn(conn)
     return res
 
 
-def get_osv_by_ilike_id(osv_id: str) -> dict:
+async def get_osv_by_ilike_id(osv_id: str) -> dict:
     """
-    Get OSV vulnerability by OSV ID with severity data.
+    Get OSV vulnerabilities by OSV ID pattern with severity data.
+
+    Returns unique results per vulnerability ID with aggregated severity data.
 
     Args:
-        osv_id: The OSV identifier (e.g., "OSV-2024-001", "GHSA-xxxx-yyyy-zzzz")
+        osv_id: The OSV identifier pattern (e.g., "2025", "GHSA-xxxx", "PYSEC-2024")
+                Supports SQL ILIKE pattern matching (% wildcards)
 
     Returns:
         dict structure with 'status' and 'result'
         result contains array of: {osv_id, schema_version, modified, published, withdrawn, summary, details, database_specific, severity}
+        severity is a JSON array of {type, score} objects
     """
     res = {"status": False, "result": None}
-    conn = get_conn()
+    pool = await get_pool()
     try:
-        with conn.cursor() as cur:
-            cur.execute(queries["get_osvs"], (osv_id,))
-            rows = cur.fetchall()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(queries["get_osvs"], osv_id)
 
         if not rows:
-            logger.debug(f"OSV {osv_id} not found in database")
+            logger.debug(f"No OSV vulnerabilities found matching pattern: {osv_id}")
             res["status"] = False
-            res["result"] = None
+            res["result"] = []
         else:
             res["status"] = True
             res["result"] = []
 
-            # Group rows by osv_id to aggregate severity data
-            osv_dict = {}
+            # Each row is now unique per osv_id (GROUP BY in query)
+            # Severity data is JSON-aggregated in row[8]
             for row in rows:
-                current_osv_id = row[0]
-                severity_type = row[8]  # severity_type from LEFT JOIN
-                severity_score = row[9]  # score from LEFT JOIN
+                osv_entry = {
+                    "osv_id": row[0],
+                    "schema_version": row[1],
+                    "modified": row[2],
+                    "published": row[3],
+                    "withdrawn": row[4],
+                    "summary": row[5],
+                    "details": row[6],
+                    "database_specific": row[7],
+                    "severity": row[8],  # Already JSON-aggregated by query
+                }
+                res["result"].append(osv_entry)
 
-                # Initialize OSV entry if not exists
-                if current_osv_id not in osv_dict:
-                    osv_dict[current_osv_id] = {
-                        "osv_id": current_osv_id,
-                        "schema_version": row[1],
-                        "modified": row[2],
-                        "published": row[3],
-                        "withdrawn": row[4],
-                        "summary": row[5],
-                        "details": row[6],
-                        "database_specific": row[7],
-                        "severity": {}
-                    }
-
-                # Add severity data if present (LEFT JOIN may return NULL)
-                if severity_type and severity_score:
-                    if severity_type not in osv_dict[current_osv_id]["severity"]:
-                        osv_dict[current_osv_id]["severity"][severity_type] = []
-                    osv_dict[current_osv_id]["severity"][severity_type].append({
-                        "score": severity_score
-                    })
-
-            # Convert dict to list (limit to 25 unique OSVs)
-            res["result"] = list(osv_dict.values())[:25]
-            logger.debug(f"Found {len(res['result'])} OSV results for {osv_id}")
-    except psql.Error as e:
+            logger.debug(
+                f"Found {len(res['result'])} unique OSV results for pattern: {osv_id}"
+            )
+    except asyncpg.PostgresError as e:
         logger.error(f"PSQL error getting OSV: {e}")
         res["status"] = False
+        res["result"] = []
     except Exception as e:
         logger.error(f"Error getting OSV: {e}")
         res["status"] = False
-    finally:
-        put_conn(conn)
-    return res
-
-
-def get_combined_vulnerability_data(vuln_id: str) -> dict:
-    """
-    Get combined vulnerability data from both NVD and OSV sources.
-
-    This function accepts either a CVE ID (e.g., CVE-2024-1234) or an OSV ID
-    (e.g., GHSA-xxxx-yyyy-zzzz, PYSEC-2024-123) and returns comprehensive
-    data from both sources when available.
-
-    Args:
-        vuln_id: Vulnerability identifier (CVE ID or OSV ID)
-
-    Returns:
-        dict structure with 'status' and 'result' containing:
-            - NVD data: cve_id, descriptions, CVSS metrics, weakness, configurations
-            - OSV data: osv_id, summary, details, severity, affected packages, references
-            - data_source: 'both', 'nvd_only', 'osv_only', or 'none'
-
-    Example:
-        >>> result = get_combined_vulnerability_data('CVE-2024-1234')
-        >>> if result['status']:
-        >>>     vuln = result['result']
-        >>>     print(f"CVE: {vuln['cve_id']}, OSV: {vuln['osv_id']}")
-        >>>     print(f"Data sources: {vuln['data_source']}")
-    """
-    res = {"status": True, "result": None}
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            # Pass the ID twice - once for CVE lookup, once for OSV lookup
-            # The query's UNION will handle determining which one matches
-            cur.execute(queries["get_combined_vulnerability_data"], (vuln_id, vuln_id))
-            row = cur.fetchone()
-
-        if not row:
-            logger.warning(f"No vulnerability data found for ID: {vuln_id}")
-            res["status"] = False
-            res["result"] = {"error": f"No data found for {vuln_id}"}
-            return res
-
-        # Parse the result row
-        result = {
-            # NVD data
-            "cve_id": row[0],
-            "source_identifier": row[1],
-            "nvd_published": str(row[2]) if row[2] else None,
-            "nvd_modified": str(row[3]) if row[3] else None,
-            "vuln_status": row[4],
-            "nvd_refs": row[5],
-            "nvd_descriptions": row[6],
-            "weakness": row[7],
-            "configurations": row[8],
-            "nvd_cvss_metrics": row[9],  # Already JSON aggregated
-
-            # OSV data
-            "osv_id": row[10],
-            "schema_version": row[11],
-            "osv_published": str(row[12]) if row[12] else None,
-            "osv_modified": str(row[13]) if row[13] else None,
-            "withdrawn": str(row[14]) if row[14] else None,
-            "osv_summary": row[15],
-            "osv_details": row[16],
-            "osv_database_specific": row[17],
-            "osv_aliases": row[18],  # Already JSON aggregated
-            "osv_severity": row[19],  # Already JSON aggregated
-            "osv_references": row[20],  # Already JSON aggregated
-            "osv_affected": row[21],  # Already JSON aggregated
-            "osv_credits": row[22],  # Already JSON aggregated
-
-            # Metadata
-            "data_source": row[23]  # 'both', 'nvd_only', 'osv_only', or 'none'
-        }
-
-        res["result"] = result
-        logger.debug(
-            f"Combined vulnerability data retrieved for {vuln_id}: "
-            f"CVE={result['cve_id']}, OSV={result['osv_id']}, "
-            f"source={result['data_source']}"
-        )
-
-    except psql.Error as e:
-        logger.error(f"PSQL error getting combined vulnerability data: {e}")
-        res["status"] = False
-        res["result"] = {"error": str(e)}
-    except Exception as e:
-        logger.error(f"Error getting combined vulnerability data: {e}")
-        res["status"] = False
-        res["result"] = {"error": str(e)}
-    finally:
-        put_conn(conn)
-
+        res["result"] = []
     return res

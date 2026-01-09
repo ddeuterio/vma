@@ -11,7 +11,7 @@ Tests complete user workflows across multiple endpoints:
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi import status
 from httpx import AsyncClient, ASGITransport
 from datetime import datetime, timezone
@@ -65,11 +65,17 @@ class TestCompleteOnboardingWorkflow:
             mock_helper.validate_scopes.side_effect = lambda x: {"devops": "admin"} if x else None
             mock_hasher.hash.return_value = "hashed_password"
 
+            # Mock get_teams for root user authorization
+            mock_c.get_teams = AsyncMock(return_value={
+                "status": True,
+                "result": [{"name": "devops"}, {"name": "platform"}]
+            })
+
             # Step 1: Create team
-            mock_c.insert_teams.return_value = {
+            mock_c.insert_teams = AsyncMock(return_value={
                 "status": True,
                 "result": {"name": "devops"}
-            }
+            })
 
             response_team = await client.post(
                 "/api/v1/team",
@@ -81,10 +87,10 @@ class TestCompleteOnboardingWorkflow:
             assert response_team.json()["result"]["name"] == "devops"
 
             # Step 2: Create admin user for team
-            mock_c.insert_users.return_value = {
+            mock_c.insert_users = AsyncMock(return_value={
                 "status": True,
                 "result": {"user": "devops-admin@test.com"}
-            }
+            })
 
             response_user = await client.post(
                 "/api/v1/user",
@@ -108,10 +114,10 @@ class TestCompleteOnboardingWorkflow:
             )
             api_server.dependency_overrides[a.validate_access_token] = lambda: admin_token
 
-            mock_c.insert_product.return_value = {
+            mock_c.insert_product = AsyncMock(return_value={
                 "status": True,
                 "result": {"id": "web-app"}
-            }
+            })
 
             response_product = await client.post(
                 "/api/v1/product",
@@ -126,7 +132,7 @@ class TestCompleteOnboardingWorkflow:
             assert response_product.status_code == status.HTTP_200_OK
 
             # Step 4: Create image
-            mock_c.insert_image.return_value = {
+            mock_c.insert_image = AsyncMock(return_value={
                 "status": True,
                 "result": {
                     "name": "web-app",
@@ -134,7 +140,7 @@ class TestCompleteOnboardingWorkflow:
                     "product": "web-app",
                     "team": "devops"
                 }
-            }
+            })
 
             response_image = await client.post(
                 "/api/v1/image",
@@ -188,13 +194,13 @@ class TestVulnerabilityScanningWorkflow:
             mock_auth.generate_api_token.return_value = mock_token
             mock_auth.hasher.hash.return_value = "hashed_token"
 
-            mock_c.insert_api_token.return_value = {
+            mock_c.insert_api_token = AsyncMock(return_value={
                 "status": True,
                 "result": {
                     "id": 1,
                     "created_at": datetime.now(timezone.utc)
                 }
-            }
+            })
 
             response_token = await client.post(
                 "/api/v1/apitoken",
@@ -223,12 +229,12 @@ class TestVulnerabilityScanningWorkflow:
         api_server.dependency_overrides[a.validate_api_token] = override_validate_api_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_images.return_value = {"status": False}
-        mock_c.insert_image.return_value = {"status": True}
-        mock_c.insert_image_vulnerabilities.return_value = {
+        mock_c.get_images = AsyncMock(return_value={"status": False})
+        mock_c.insert_image = AsyncMock(return_value={"status": True})
+        mock_c.insert_image_vulnerabilities = AsyncMock(return_value={
             "status": True,
             "result": "5 vulnerabilities imported"
-        }
+        })
 
         vuln_data = [
             ["grype", "api", "2.1.0", "backend", "security", "CVE-2023-1234",
@@ -271,10 +277,10 @@ class TestVulnerabilityScanningWorkflow:
             }
         ]
 
-        mock_c.get_image_vulnerabilities.return_value = {
+        mock_c.get_image_vulnerabilities = AsyncMock(return_value={
             "status": True,
             "result": []
-        }
+        })
 
         response_vulns = await client.get(
             "/api/v1/image/security/backend/api/2.1.0/vuln",
@@ -322,12 +328,12 @@ class TestImageUpdateWorkflow:
         mock_c = mock_router_dependencies["connector"]
         mock_helper = mock_router_dependencies["helper"]
 
-        mock_c.get_images.return_value = {"status": False}
-        mock_c.insert_image.return_value = {"status": True}
-        mock_c.insert_image_vulnerabilities.return_value = {
+        mock_c.get_images = AsyncMock(return_value={"status": False})
+        mock_c.insert_image = AsyncMock(return_value={"status": True})
+        mock_c.insert_image_vulnerabilities = AsyncMock(return_value={
             "status": True,
             "result": "3 vulnerabilities imported"
-        }
+        })
 
         vuln_data = [
             ["grype", "web-ui", "2.0.0", "frontend", "development", "CVE-2023-5678",
@@ -418,10 +424,21 @@ class TestMultiTeamCollaboration:
             }
             mock_hasher.hash.return_value = "hashed_password"
 
-            mock_c.insert_users.return_value = {
+            # Mock get_teams for root user authorization
+            mock_c.get_teams = AsyncMock(return_value={
+                "status": True,
+                "result": [
+                    {"name": "admin"},
+                    {"name": "team-a"},
+                    {"name": "team-b"},
+                    {"name": "team-c"}
+                ]
+            })
+
+            mock_c.insert_users = AsyncMock(return_value={
                 "status": True,
                 "result": {"user": "multi@test.com"}
-            }
+            })
 
             # Create multi-team user
             response_user = await client.post(
@@ -455,10 +472,10 @@ class TestMultiTeamCollaboration:
             api_server.dependency_overrides[a.validate_access_token] = override_multi
 
             # Access resources in team-a (admin)
-            mock_c.get_products.return_value = {
+            mock_c.get_products = AsyncMock(return_value={
                 "status": True,
                 "result": [{"id": "prod-a", "team": "team-a"}]
-            }
+            })
 
             response_a = await client.get(
                 "/api/v1/product/team-a/prod-a",
@@ -468,10 +485,10 @@ class TestMultiTeamCollaboration:
             assert response_a.status_code == status.HTTP_200_OK
 
             # Create product in team-b (write access)
-            mock_c.insert_product.return_value = {
+            mock_c.insert_product = AsyncMock(return_value={
                 "status": True,
                 "result": {"id": "prod-b"}
-            }
+            })
 
             response_b = await client.post(
                 "/api/v1/product",
@@ -533,13 +550,13 @@ class TestAPITokenLifecycle:
             mock_auth.generate_api_token.return_value = mock_token
             mock_auth.hasher.hash.return_value = "hashed_token"
 
-            mock_c.insert_api_token.return_value = {
+            mock_c.insert_api_token = AsyncMock(return_value={
                 "status": True,
                 "result": {
                     "id": 10,
                     "created_at": datetime.now(timezone.utc)
                 }
-            }
+            })
 
             response_create = await client.post(
                 "/api/v1/apitoken",
@@ -557,7 +574,7 @@ class TestAPITokenLifecycle:
             # Step 2: Use token (already tested in other workflows)
 
             # Step 3: List tokens
-            mock_c.list_api_tokens.return_value = {
+            mock_c.list_api_tokens = AsyncMock(return_value={
                 "status": True,
                 "result": [
                     {
@@ -568,7 +585,7 @@ class TestAPITokenLifecycle:
                         "revoked": False
                     }
                 ]
-            }
+            })
 
             response_list = await client.get(
                 "/api/v1/tokens",
@@ -579,18 +596,18 @@ class TestAPITokenLifecycle:
             assert len(response_list.json()["result"]) == 1
 
             # Step 4: Revoke token
-            mock_c.get_api_token_by_id.return_value = {
+            mock_c.get_api_token_by_id = AsyncMock(return_value={
                 "status": True,
                 "result": {
                     "id": token_id,
                     "user_email": "cicd@test.com"
                 }
-            }
+            })
 
-            mock_c.revoke_api_token.return_value = {
+            mock_c.revoke_api_token = AsyncMock(return_value={
                 "status": True,
                 "result": "Token revoked"
-            }
+            })
 
             response_revoke = await client.delete(
                 f"/api/v1/tokens/{token_id}",
@@ -684,10 +701,10 @@ class TestUserPermissionChanges:
             mock_helper.validate_scopes.return_value = {"engineering": "write"}
             mock_helper.errors = mock_helper_errors
 
-            mock_c.update_users.return_value = {
+            mock_c.update_users = AsyncMock(return_value={
                 "status": True,
                 "result": {"updated": 1}
-            }
+            })
 
             response_upgrade = await client.patch(
                 "/api/v1/user",
@@ -720,10 +737,10 @@ class TestUserPermissionChanges:
 
             mock_helper.validate_input.side_effect = lambda x: x
             mock_helper.errors = mock_helper_errors
-            mock_c.insert_product.return_value = {
+            mock_c.insert_product = AsyncMock(return_value={
                 "status": True,
                 "result": {"id": "new-service"}
-            }
+            })
 
             response_success = await client.post(
                 "/api/v1/product",

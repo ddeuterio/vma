@@ -12,7 +12,7 @@ Tests cover:
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi import status
 from httpx import AsyncClient, ASGITransport
 
@@ -78,10 +78,10 @@ class TestUserCreation:
             mock_helper.validate_input.side_effect = lambda x: x
             mock_helper.validate_scopes.return_value = {"team1": "read"}
             mock_hasher.hash.return_value = "hashed_password"
-            mock_c.insert_users.return_value = {
+            mock_c.insert_users = AsyncMock(return_value={
                 "status": True,
                 "result": {"user": "newuser@test.com"}
-            }
+            })
 
             response = await client.post(
                 "/api/v1/user",
@@ -121,10 +121,19 @@ class TestUserCreation:
                 "team3": "read"
             }
             mock_hasher.hash.return_value = "hashed_password"
-            mock_c.insert_users.return_value = {
+            # Mock get_teams for root user authorization
+            mock_c.get_teams = AsyncMock(return_value={
+                "status": True,
+                "result": [
+                    {"name": "team1"},
+                    {"name": "team2"},
+                    {"name": "team3"}
+                ]
+            })
+            mock_c.insert_users = AsyncMock(return_value={
                 "status": True,
                 "result": {"user": "multiuser@test.com"}
-            }
+            })
 
             response = await client.post(
                 "/api/v1/user",
@@ -261,7 +270,7 @@ class TestUserRetrieval:
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         with patch("vma.api.routers.v1.c") as mock_c:
-            mock_c.get_users.return_value = {
+            mock_c.get_users = AsyncMock(return_value={
                 "status": True,
                 "result": [
                     {
@@ -277,7 +286,7 @@ class TestUserRetrieval:
                         "scope": {"team1": "write"}
                     }
                 ]
-            }
+            })
 
             response = await client.get(
                 "/api/v1/users",
@@ -318,7 +327,7 @@ class TestUserRetrieval:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.get_users.return_value = {
+            mock_c.get_users = AsyncMock(return_value={
                 "status": True,
                 "result": [
                     {
@@ -328,7 +337,7 @@ class TestUserRetrieval:
                         "scope": {"team1": "write"}
                     }
                 ]
-            }
+            })
 
             response = await client.get(
                 "/api/v1/user/user@test.com",
@@ -370,7 +379,7 @@ class TestUserRetrieval:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.get_users.return_value = {
+            mock_c.get_users = AsyncMock(return_value={
                 "status": True,
                 "result": [
                     {
@@ -380,7 +389,7 @@ class TestUserRetrieval:
                         "scope": {"team2": "admin"}
                     }
                 ]
-            }
+            })
 
             response = await client.get(
                 "/api/v1/user/other@test.com",
@@ -407,10 +416,10 @@ class TestUserUpdate:
 
             mock_helper.validate_input.side_effect = lambda x: x
             mock_hasher.hash.return_value = "new_hashed_password"
-            mock_c.update_users.return_value = {
+            mock_c.update_users = AsyncMock(return_value={
                 "status": True,
                 "result": {"updated": 1}
-            }
+            })
 
             response = await client.patch(
                 "/api/v1/user",
@@ -439,10 +448,10 @@ class TestUserUpdate:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.update_users.return_value = {
+            mock_c.update_users = AsyncMock(return_value={
                 "status": True,
                 "result": {"updated": 1}
-            }
+            })
 
             response = await client.patch(
                 "/api/v1/user",
@@ -497,10 +506,10 @@ class TestUserUpdate:
 
             mock_helper.validate_input.side_effect = lambda x: x
             mock_helper.validate_scopes.return_value = {"team1": "admin", "team2": "write"}
-            mock_c.update_users.return_value = {
+            mock_c.update_users = AsyncMock(return_value={
                 "status": True,
                 "result": {"updated": 1}
-            }
+            })
 
             response = await client.patch(
                 "/api/v1/user",
@@ -528,10 +537,10 @@ class TestUserUpdate:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.update_users.return_value = {
+            mock_c.update_users = AsyncMock(return_value={
                 "status": True,
                 "result": {"updated": 1}
-            }
+            })
 
             response = await client.patch(
                 "/api/v1/user",
@@ -560,10 +569,10 @@ class TestUserUpdate:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x if x else None
-            mock_c.update_users.return_value = {
+            mock_c.update_users = AsyncMock(return_value={
                 "status": True,
                 "result": {"updated": 1}
-            }
+            })
 
             response = await client.patch(
                 "/api/v1/user",
@@ -597,10 +606,10 @@ class TestUserDeletion:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.delete_user.return_value = {
+            mock_c.delete_user = AsyncMock(return_value={
                 "status": True,
                 "result": {"deleted": 1}
-            }
+            })
 
             response = await client.delete(
                 "/api/v1/user/user@test.com",
@@ -641,10 +650,15 @@ class TestUserDeletion:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_c.delete_user.return_value = {
+            # Mock get_teams for root user authorization
+            mock_c.get_teams = AsyncMock(return_value={
+                "status": True,
+                "result": [{"name": "team1"}]
+            })
+            mock_c.delete_user = AsyncMock(return_value={
                 "status": True,
                 "result": {"deleted": 1}
-            }
+            })
 
             response = await client.delete(
                 "/api/v1/user/any@test.com",
