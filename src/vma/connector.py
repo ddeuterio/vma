@@ -25,7 +25,7 @@ queries = {
         FROM
             nvd_sync
         WHERE
-            id = %1;
+            id = $1;
     """,
     "get_nvd_sync_data": """
         SELECT
@@ -33,7 +33,7 @@ queries = {
         FROM
             nvd_sync
         WHERE
-            id = %1;
+            id = $1;
     """,
     "get_all_years_nvd_sync": """
         SELECT
@@ -73,7 +73,7 @@ queries = {
         ON
             v.cve_id = cm.cve_id
         WHERE
-            v.cve_id ILIKE %1
+            v.cve_id ILIKE $1
         GROUP BY
             v.cve_id,
             v.source_identifier,
@@ -91,7 +91,7 @@ queries = {
     "insert_cve": """
         INSERT INTO vulnerabilities
             (cve_id, source_identifier, published_date, last_modified, vuln_status, refs, descriptions, weakness, configurations)
-        VALUES %1
+        VALUES $1
         ON CONFLICT (cve_id)
         DO UPDATE SET
             cve_id = EXCLUDED.cve_id,
@@ -107,7 +107,7 @@ queries = {
     "insert_cvss": """
         INSERT INTO cvss_metrics
             (cve_id, source, cvss_version, vector_string, base_score, base_severity)
-        VALUES %1
+        VALUES $1
         ON CONFLICT (cve_id, source, cvss_version)
         DO UPDATE SET
             vector_string = EXCLUDED.vector_string,
@@ -117,7 +117,7 @@ queries = {
     "insert_fetch_date": """
         INSERT INTO nvd_sync
             (id, last_fetched, chcksum)
-        VALUES (%1, %2, %3)
+        VALUES ($1, $2, $3)
         ON CONFLICT (id)
         DO UPDATE SET
             last_fetched = EXCLUDED.last_fetched,
@@ -129,7 +129,7 @@ queries = {
         FROM
             products
         WHERE
-            team = ANY(%1)
+            team = ANY($1)
         ORDER BY
             id;
     """,
@@ -139,8 +139,8 @@ queries = {
         FROM
             products
         WHERE
-            id = %1 AND
-            team = ANY(%2)
+            id = $1 AND
+            team = ANY($2)
         ORDER BY
             id;
     """,
@@ -148,7 +148,7 @@ queries = {
         INSERT INTO
             products (id, description, team)
         VALUES
-            (%1, %2, %3)
+            ($1, $2, $3)
         RETURNING
             id;
     """,
@@ -156,8 +156,8 @@ queries = {
         DELETE FROM
             products
         WHERE
-            id = %1 AND
-            team = %2;
+            id = $1 AND
+            team = $2;
     """,
     "get_images": """
         SELECT
@@ -168,7 +168,7 @@ queries = {
         FROM
             images
         WHERE
-            team = ANY(%1)
+            team = ANY($1)
         ORDER BY
             team,
             product,
@@ -184,8 +184,8 @@ queries = {
         FROM
             images
         WHERE
-            name = %1 AND
-            team = ANY(%2)
+            name = $1 AND
+            team = ANY($2)
         ORDER BY
             product,
             name,
@@ -200,8 +200,8 @@ queries = {
         FROM
             images
         WHERE
-            product = %1 AND
-            team = ANY(%2)
+            product = $1 AND
+            team = ANY($2)
         ORDER BY
             product,
             name,
@@ -216,9 +216,9 @@ queries = {
         FROM
             images
         WHERE
-            name = %1 AND
-            product = %2 AND
-            team = ANY(%3)
+            name = $1 AND
+            product = $2 AND
+            team = ANY($3)
         ORDER BY
             product,
             name,
@@ -233,10 +233,10 @@ queries = {
         FROM
             images
         WHERE
-            name = %1 AND
-            version = %2 AND
-            product = %3 AND
-            team = ANY(%4)
+            name = $1 AND
+            version = $2 AND
+            product = $3 AND
+            team = ANY($4)
         ORDER BY
             product,
             name,
@@ -246,7 +246,7 @@ queries = {
         INSERT INTO
             images (name, version, product, team)
         VALUES
-            (%1, %2, %3, %4)
+            ($1, $2, $3, $4)
         RETURNING
             name, version, product, team;
     """,
@@ -254,18 +254,18 @@ queries = {
         DELETE FROM
             images
         WHERE
-            name = %1 AND
-            product = %2 AND
-            team = %3;
+            name = $1 AND
+            product = $2 AND
+            team = $3;
     """,
     "delete_image_by_name_version": """
         DELETE FROM
             images
         WHERE
-            name = %1 AND
-            version = %2 AND
-            product = %3 AND
-            team = %4;
+            name = $1 AND
+            version = $2 AND
+            product = $3 AND
+            team = $4;
     """,
     "get_image_vulnerabilities": """
         SELECT
@@ -299,10 +299,10 @@ queries = {
             WHERE rn = 1
         ) cv ON cv.cve_id = iv.cve
         WHERE
-            iv.product = %1
-            AND iv.image_name = %2
-            AND iv.image_version = %3
-            AND iv.team = %4
+            iv.product = $1
+            AND iv.image_name = $2
+            AND iv.image_version = $3
+            AND iv.team = $4
         ORDER BY
             iv.cve,
             iv.affected_component;
@@ -311,7 +311,7 @@ queries = {
         INSERT INTO image_vulnerabilities
             (scanner, image_name, image_version, product, team, cve, fix_versions, first_seen, last_seen, affected_component_type, affected_component, affected_version, affected_path)
         VALUES
-            %1
+            $1
         ON CONFLICT
             (scanner, image_name, image_version, product, team, cve, affected_component_type, affected_component)
         DO UPDATE SET
@@ -325,10 +325,10 @@ queries = {
                 affected_component,
                 affected_path
             FROM image_vulnerabilities
-            WHERE team = %1
-            AND product = %2
-            AND image_name = %3
-            AND image_version = %4
+            WHERE team = $1
+            AND product = $2
+            AND image_name = $3
+            AND image_version = $4
         ),
         image_b AS (
             SELECT DISTINCT
@@ -337,10 +337,10 @@ queries = {
                 affected_component,
                 affected_path
             FROM image_vulnerabilities
-            WHERE team = %1
-            AND product = %2
-            AND image_name = %3
-            AND image_version = %4
+            WHERE team = $1
+            AND product = $2
+            AND image_name = $3
+            AND image_version = $4
         ),
         diff AS (
             SELECT
@@ -391,7 +391,7 @@ queries = {
         FROM
             users
         WHERE
-            email = %1;
+            email = $1;
     """,
     "get_users_by_password": """
         SELECT
@@ -399,8 +399,8 @@ queries = {
         FROM
             users
         WHERE
-            email = %1 AND
-            hpass = %2;
+            email = $1 AND
+            hpass = $2;
     """,
     "get_users_by_team": """
         SELECT
@@ -408,20 +408,20 @@ queries = {
         FROM
             users
         WHERE
-            team = %1;
+            team = $1;
     """,
     "insert_users": """
         INSERT INTO
             users (email, hpass, name, is_root)
         VALUES
-            (%1, %2, %3, %4)
+            ($1, $2, $3, $4)
         RETURNING email;
     """,
     "delete_user_by_email": """
         DELETE FROM
             users
         WHERE
-            email = %1;
+            email = $1;
     """,
     "get_teams": """
         SELECT
@@ -435,13 +435,13 @@ queries = {
         FROM
             teams
         WHERE
-            name = %1;
+            name = $1;
     """,
     "insert_teams": """
         INSERT INTO
             teams (name, description)
         VALUES
-            (%1, %2)
+            ($1, $2)
         RETURNING
             name;
     """,
@@ -449,7 +449,7 @@ queries = {
         DELETE FROM
             teams
         WHERE
-            name = %1;
+            name = $1;
     """,
     "get_user_team_scopes": """
         SELECT
@@ -463,13 +463,13 @@ queries = {
         FROM
             user_team_scopes
         WHERE
-            user_email = %1;
+            user_email = $1;
     """,
     "insert_user_team_scopes": """
         INSERT INTO user_team_scopes 
             (user_email, team_id, scope)
         VALUES
-            (%1, %2, %3)
+            ($1, $2, $3)
         ON CONFLICT
             (user_email, team_id)
         DO UPDATE SET
@@ -479,23 +479,23 @@ queries = {
         UPDATE
             user_team_scopes
         SET
-            user_email = %1,
-            team_id = %2,
-            scope = %3
+            user_email = $1,
+            team_id = $2,
+            scope = $3
         WHERE
-            user_email = %4;
+            user_email = $4;
     """,
     "delete_user_team_scopes_by_user": """
         DELETE FROM
             user_team_scopes
         WHERE
-            user_email = %1;
+            user_email = $1;
     """,
     "insert_api_token": """
         INSERT INTO
             api_tokens (token_hash, prefix, user_email, description, expires_at)
         VALUES
-            (%1, %2, %3, %4, %5)
+            ($1, $2, $3, $4, $5)
         RETURNING
             id, prefix, created_at;
     """,
@@ -505,7 +505,7 @@ queries = {
         FROM
             api_tokens
         WHERE
-            token_hash = %1;
+            token_hash = $1;
     """,
     "get_api_token_by_prefix": """
         SELECT
@@ -513,7 +513,7 @@ queries = {
         FROM
             api_tokens
         WHERE
-            prefix = %1;
+            prefix = $1;
     """,
     "list_api_tokens_by_user": """
         SELECT
@@ -521,7 +521,7 @@ queries = {
         FROM
             api_tokens
         WHERE
-            user_email = %1 AND
+            user_email = $1 AND
             revoked = FALSE
         ORDER BY
             created_at DESC;
@@ -542,8 +542,8 @@ queries = {
         SET
             revoked = TRUE
         WHERE
-            id = %1 AND
-            user_email = %2
+            id = $1 AND
+            user_email = $2
         RETURNING id;
     """,
     "revoke_api_token_admin": """
@@ -552,7 +552,7 @@ queries = {
         SET
             revoked = TRUE
         WHERE
-            id = %1
+            id = $1
         RETURNING id;
     """,
     "update_token_last_used": """
@@ -561,7 +561,27 @@ queries = {
         SET
             last_used_at = NOW()
         WHERE
-            id = %1;
+            id = $1;
+    """,
+    "update_user_password": """
+        UPDATE users
+        SET hpass = $1
+        WHERE email = $2;
+    """,
+    "update_user_name": """
+        UPDATE users
+        SET name = $1
+        WHERE email = $2;
+    """,
+    "update_user_root": """
+        UPDATE users
+        SET is_root = $1
+        WHERE email = $2;
+    """,
+    "update_user_password_name": """
+        UPDATE users
+        SET hpass = $1, name = $2
+        WHERE email = $3;
     """,
     "get_api_token_by_id": """
         SELECT
@@ -569,12 +589,12 @@ queries = {
         FROM
             api_tokens
         WHERE
-            id = %1;
+            id = $1;
     """,
     "insert_osv_vulnerability": """
         INSERT INTO osv_vulnerabilities
             (osv_id, schema_version, modified, published, withdrawn, summary, details, database_specific)
-        VALUES %1
+        VALUES $1
         ON CONFLICT (osv_id)
         DO UPDATE SET
             schema_version = EXCLUDED.schema_version,
@@ -588,41 +608,41 @@ queries = {
     "insert_osv_alias": """
         INSERT INTO osv_aliases
             (osv_id, alias)
-        VALUES %1
+        VALUES $1
         ON CONFLICT (osv_id, alias)
         DO NOTHING;
     """,
     "insert_osv_reference": """
         INSERT INTO osv_references
             (osv_id, ref_type, url)
-        VALUES %1;
+        VALUES $1;
     """,
     "insert_osv_severity": """
         INSERT INTO osv_severity
             (osv_id, severity_type, score)
-        VALUES %1;
+        VALUES $1;
     """,
     "insert_osv_affected": """
         INSERT INTO osv_affected
             (osv_id, package_ecosystem, package_name, package_purl, ranges, versions, ecosystem_specific, database_specific)
-        VALUES %1;
+        VALUES $1;
     """,
     "insert_osv_credit": """
         INSERT INTO osv_credits
             (osv_id, name, contact, credit_type)
-        VALUES %1;
+        VALUES $1;
     """,
     "delete_osv_references": """
-        DELETE FROM osv_references WHERE osv_id = %1;
+        DELETE FROM osv_references WHERE osv_id = $1;
     """,
     "delete_osv_severity": """
-        DELETE FROM osv_severity WHERE osv_id = %1;
+        DELETE FROM osv_severity WHERE osv_id = $1;
     """,
     "delete_osv_affected": """
-        DELETE FROM osv_affected WHERE osv_id = %1;
+        DELETE FROM osv_affected WHERE osv_id = $1;
     """,
     "delete_osv_credits": """
-        DELETE FROM osv_credits WHERE osv_id = %1;
+        DELETE FROM osv_credits WHERE osv_id = $1;
     """,
     "get_osv_by_id": """
         SELECT
@@ -630,7 +650,7 @@ queries = {
         FROM
             osv_vulnerabilities
         WHERE
-            osv_id = %1;
+            osv_id = $1;
     """,
     "get_osvs": """
         SELECT
@@ -656,7 +676,7 @@ queries = {
         LEFT JOIN
             osv_severity s ON v.osv_id = s.osv_id
         WHERE
-            v.osv_id ILIKE %1
+            v.osv_id ILIKE $1
         GROUP BY
             v.osv_id,
             v.schema_version,
@@ -676,7 +696,7 @@ queries = {
         FROM
             osv_aliases
         WHERE
-            osv_id = %1;
+            osv_id = $1;
     """,
     "get_osv_by_cve": """
         SELECT
@@ -686,7 +706,7 @@ queries = {
         INNER JOIN
             osv_aliases a ON v.osv_id = a.osv_id
         WHERE
-            a.alias = %1;
+            a.alias = $1;
     """,
     "correlate_nvd_osv": """
         SELECT
@@ -705,7 +725,7 @@ queries = {
         INNER JOIN
             osv_vulnerabilities ov ON oa.osv_id = ov.osv_id
         WHERE
-            nv.cve_id = %1;
+            nv.cve_id = $1;
     """,
 }
 
@@ -991,7 +1011,8 @@ async def delete_product(id: str, team: str) -> dict:
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
-            q = await conn.execute(queries["delete_product"], id, team)
+            async with conn.transaction():
+                q = await conn.execute(queries["delete_product"], id, team)
             if not q.rowcount:
                 res["status"] = False
             else:
@@ -1241,19 +1262,20 @@ async def delete_image(team, product, name=None, version=None) -> dict:
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
-            q = None
-            if version and name:
-                q = await conn.execute(
-                    queries["delete_image_by_name_version"],
-                    name,
-                    version,
-                    product,
-                    team,
-                )
-            elif name:
-                q = await conn.execute(
-                    queries["delete_image_by_name"], name, product, team
-                )
+            async with conn.transaction():
+                q = None
+                if version and name:
+                    q = await conn.execute(
+                        queries["delete_image_by_name_version"],
+                        name,
+                        version,
+                        product,
+                        team,
+                    )
+                elif name:
+                    q = await conn.execute(
+                        queries["delete_image_by_name"], name, product, team
+                    )
 
             if not q or q.rowcount < 1:
                 logger.error(
@@ -1426,66 +1448,80 @@ async def update_users(
     email, password=None, name=None, scopes=None, is_root=None
 ) -> dict:
     """
-    Update an user
+    Update a user
 
     Args:
-        email
-        name
-        password
-        scopes: dict with team-scope bindings
+        email: user email (identifier)
+        password: new hashed password (optional)
+        name: new name (optional)
+        scopes: dict with team-scope bindings (optional)
+        is_root: root privilege flag (optional)
+
     Returns:
         dict structure with 'status' and 'result'
     """
+    res = {"status": True, "result": {"user": email}}
     pool = await get_pool()
+
     try:
         async with pool.acquire() as conn:
-            res = await get_users(email)
-            original_email = res["result"][0]["email"] if res["status"] else ""
-            logger.debug(f"original email is {original_email}")
-            update_fields = []
-            fields = []
+            async with conn.transaction():
+                # Handle common cases with predefined queries
+                if password and not name and is_root is None:
+                    await conn.execute(queries["update_user_password"], password, email)
+                elif name and not password and is_root is None:
+                    await conn.execute(queries["update_user_name"], name, email)
+                elif is_root is not None and not password and not name:
+                    await conn.execute(queries["update_user_root"], is_root, email)
+                elif password and name and is_root is None:
+                    await conn.execute(
+                        queries["update_user_password_name"], password, name, email
+                    )
+                else:
+                    # Build query dynamically with correct $N notation
+                    update_fields = []
+                    fields = []
+                    param_idx = 1
 
-            if original_email != email:
-                update_fields.append(
-                    "email = %s"
-                )  # TODO: look how to include the order here
-                fields.append(email)
+                    if password:
+                        update_fields.append(f"hpass = ${param_idx}")
+                        fields.append(password)
+                        param_idx += 1
 
-            if password:
-                update_fields.append("hpass = %s")
-                fields.append(password)
+                    if name:
+                        update_fields.append(f"name = ${param_idx}")
+                        fields.append(name)
+                        param_idx += 1
 
-            if name:
-                update_fields.append("name = %s")
-                fields.append(name)
+                    if is_root is not None:
+                        update_fields.append(f"is_root = ${param_idx}")
+                        fields.append(is_root)
+                        param_idx += 1
 
-            if is_root is not None:
-                update_fields.append("is_root = %s")
-                fields.append(is_root)
+                    if update_fields:
+                        q = f"UPDATE users SET {', '.join(update_fields)} WHERE email = ${param_idx};"
+                        fields.append(email)
+                        await conn.execute(q, *fields)
 
-            if update_fields:
-                fields.append(email)
-                q = f"""
-                    UPDATE users SET {(", ").join(update_fields)} WHERE email = %s;
-                """
-                await conn.execute(
-                    q, tuple(fields)
-                )  # TODO: fix the tuples, should be field by param
+                # Handle scope updates (separate from user table)
+                if scopes:
+                    logger.debug("updating scopes")
+                    for t, s in scopes.items():
+                        logger.debug(f"team: {t}; scope: {s}")
+                        await conn.execute(
+                            queries["insert_user_team_scopes"], email, t, s
+                        )
 
-            if scopes:
-                logger.debug("updating scopes")
-                for t, s in scopes.items():
-                    logger.debug(f"team: {t}; scope: {s}")
-                    await conn.execute(queries["insert_user_team_scopes"], email, t, s)
+        logger.debug(f"User {email} has been updated")
 
-        logger.debug(f"A user {email} has been updated")
     except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
-        res = {"status": False, "result": None}
+        res = {"status": False, "result": str(e)}
     except Exception as e:
         logger.error(f"DB error: {e}")
-        res = {"status": False, "result": None}
-    return {"status": True, "result": {"user": email}}
+        res = {"status": False, "result": str(e)}
+
+    return res
 
 
 async def delete_user(email) -> dict:
@@ -1502,7 +1538,8 @@ async def delete_user(email) -> dict:
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
-            q = await conn.execute(queries["delete_user_by_email"], email)
+            async with conn.transaction():
+                q = await conn.execute(queries["delete_user_by_email"], email)
             if not q.rowcount:
                 res["status"] = False
             else:
@@ -1594,7 +1631,8 @@ async def delete_team(id) -> dict:
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
-            q = await conn.execute(queries["delete_teams"], id)
+            async with conn.transaction():
+                q = await conn.execute(queries["delete_teams"], id)
             if not q.rowcount:
                 logger.error(f"Team with id {id} could not be removed")
                 res["status"] = False
@@ -1858,12 +1896,13 @@ async def revoke_api_token(
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
-            if admin:
-                q = await conn.fetchrow(queries["revoke_api_token_admin"], token_id)
-            else:
-                q = await conn.fetchrow(
-                    queries["revoke_api_token"], token_id, user_email
-                )
+            async with conn.transaction():
+                if admin:
+                    q = await conn.fetchrow(queries["revoke_api_token_admin"], token_id)
+                else:
+                    q = await conn.fetchrow(
+                        queries["revoke_api_token"], token_id, user_email
+                    )
 
         if not q:
             logger.error("Token could not be revoked")
@@ -1873,7 +1912,7 @@ async def revoke_api_token(
         res["status"] = True
         res["result"] = "Token revoked successfully"
     except Exception as e:
-        logger.error(f"Error getting API token: {e}")
+        logger.error(f"Error revoking API token: {e}")
         res["result"] = str(e)
     return res
 
@@ -1892,12 +1931,13 @@ async def update_token_last_used(token_id: int) -> dict:
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
-            await conn.execute(queries["update_token_last_used"], token_id)
+            async with conn.transaction():
+                await conn.execute(queries["update_token_last_used"], token_id)
 
         res["status"] = True
         res["result"] = "Token updated successfully"
     except Exception as e:
-        logger.error(f"Error getting API token: {e}")
+        logger.error(f"Error updating API token: {e}")
         res["result"] = str(e)
     return res
 
