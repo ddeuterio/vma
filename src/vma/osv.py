@@ -392,11 +392,13 @@ async def process_recent():
                         csv_dt = datetime.fromisoformat(
                             csv_modified.replace("Z", "+00:00")
                         )
-                        db_dt = (
-                            datetime.fromisoformat(db_modified)
-                            if isinstance(db_modified, str)
-                            else db_modified
-                        )
+                        # Normalize Z suffix to +00:00 for Python 3.10 compatibility
+                        if isinstance(db_modified, str):
+                            db_dt = datetime.fromisoformat(
+                                db_modified.replace("Z", "+00:00")
+                            )
+                        else:
+                            db_dt = db_modified
 
                         if csv_dt > db_dt:
                             needs_update = True
