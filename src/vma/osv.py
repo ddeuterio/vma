@@ -7,7 +7,6 @@ import shutil
 from google.cloud import storage
 from google.cloud.exceptions import NotFound, Forbidden
 import zipfile
-from psycopg2.extras import Json
 import csv
 from datetime import datetime
 from io import StringIO
@@ -103,7 +102,7 @@ async def clean_osv_files(path):
         path: Path to file or directory to delete
     """
     if not path:
-        logger.debug(f"Empty path provided, nothing to clean")
+        logger.debug("Empty path provided, nothing to clean")
         return
 
     # Run filesystem checks in thread pool
@@ -174,12 +173,18 @@ async def parse_osv_file(path):
         if not modified:
             logger.error(f"OSV file {path} missing required 'modified' field")
             return [[], [], [], [], [], []]
+        else:
+            modified = datetime.fromisoformat(modified).astimezone()
 
         # Published timestamp (optional)
         published = osv_data.get("published", None)
+        if published:
+            published = datetime.fromisoformat(published).astimezone()
 
         # Withdrawn timestamp (optional)
         withdrawn = osv_data.get("withdrawn", None)
+        if withdrawn:
+            withdrawn = datetime.fromisoformat(withdrawn).astimezone()
 
         # Summary (optional)
         summary = osv_data.get("summary", None)
@@ -190,7 +195,7 @@ async def parse_osv_file(path):
         # Database-specific data (optional JSONB)
         database_specific = None
         if "database_specific" in osv_data:
-            database_specific = Json(osv_data["database_specific"])
+            database_specific = json.dumps(osv_data["database_specific"])
 
         # Add main vulnerability record
         data_vuln.append(
@@ -240,22 +245,22 @@ async def parse_osv_file(path):
                 # Ranges (JSONB - complex version ranges)
                 ranges = None
                 if "ranges" in affected:
-                    ranges = Json(affected["ranges"])
+                    ranges = json.dumps(affected["ranges"])
 
                 # Versions (JSONB - explicit list of affected versions)
                 versions = None
                 if "versions" in affected:
-                    versions = Json(affected["versions"])
+                    versions = json.dumps(affected["versions"])
 
                 # Ecosystem-specific data
                 ecosystem_specific = None
                 if "ecosystem_specific" in affected:
-                    ecosystem_specific = Json(affected["ecosystem_specific"])
+                    ecosystem_specific = json.dumps(affected["ecosystem_specific"])
 
                 # Database-specific data (per affected package)
                 affected_db_specific = None
                 if "database_specific" in affected:
-                    affected_db_specific = Json(affected["database_specific"])
+                    affected_db_specific = json.dumps(affected["database_specific"])
 
                 if package_ecosystem and package_name:
                     data_affected.append(
@@ -277,7 +282,7 @@ async def parse_osv_file(path):
                 name = credit.get("name", "")
                 contact = None
                 if "contact" in credit:
-                    contact = Json(credit["contact"])
+                    contact = json.dumps(credit["contact"])
                 credit_type = credit.get("type", None)
 
                 if name:  # Only add if name is present
@@ -353,7 +358,9 @@ async def process_recent():
     # Download the CSV file with recently modified IDs
     csv_path = await get_recent()
 
-    csv_path_exists = await asyncio.to_thread(os.path.exists, csv_path) if csv_path else False
+    csv_path_exists = (
+        await asyncio.to_thread(os.path.exists, csv_path) if csv_path else False
+    )
     if not csv_path or not csv_path_exists:
         logger.error("Failed to download modified_id.csv")
         return
@@ -421,7 +428,9 @@ async def process_recent():
                         # OSV files are stored as: gs://osv-vulnerabilities/<ECOSYSTEM>/<ID>.json
                         # For simplicity, we'll try common ecosystems or use the all/ directory
                         osv_file_path = f"osv/recent/{osv_id}.json"
-                        await asyncio.to_thread(os.makedirs, os.path.dirname(osv_file_path), exist_ok=True)
+                        await asyncio.to_thread(
+                            os.makedirs, os.path.dirname(osv_file_path), exist_ok=True
+                        )
 
                         # Download from GCS (individual vulnerability files)
                         # The ID format typically includes the ecosystem (e.g., "OSV-2024-001" or "GHSA-xxxx-yyyy-zzzz")
@@ -431,7 +440,11 @@ async def process_recent():
                             dst="osv/recent",
                         )
 
-                        downloaded_exists = await asyncio.to_thread(os.path.exists, downloaded) if downloaded else False
+                        downloaded_exists = (
+                            await asyncio.to_thread(os.path.exists, downloaded)
+                            if downloaded
+                            else False
+                        )
                         if downloaded and downloaded_exists:
                             # Parse the OSV JSON file
                             parsed_data = await parse_osv_file(downloaded)

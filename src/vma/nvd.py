@@ -112,7 +112,9 @@ async def insert_vulnerabilities(f_meta, f_json):
             content = await f.read()
             data = json.loads(content)
             parsed_data = parse_nvd_data(data=data["vulnerabilities"])
-            await c.insert_vulnerabilities(parsed_data[0], parsed_data[1])
+            await c.insert_vulnerabilities(
+                data_cve=parsed_data[0], data_cvss=parsed_data[1]
+            )
 
         await asyncio.to_thread(os.remove, f_json[i])
         await c.insert_year_data(f_meta[i])
@@ -132,6 +134,7 @@ async def get_modified_cves():
     # First, check recents
     data = (r.text.splitlines()[0]).split("lastModifiedDate:")[1]
     data_iso = datetime.fromisoformat(data).astimezone()
+    data_iso_str = str(data_iso)
     last_date = await c.get_last_fetched_date(year)
 
     logger.debug(f"Dates data_iso: {data_iso}; last_date: {last_date}")
@@ -155,16 +158,15 @@ async def get_modified_cves():
                 if (nvd_date > _date) and (not (nvd_chcksum == dt[2])):
                     # There is a new file
                     news.append(y)
-                    meta.append((y, nvd_date, nvd_chcksum))
+                    meta.append((str(y), str(nvd_date), nvd_chcksum))
 
             f_json = await download_selected_cves(news)
-            await c.insert_year_data(
-                ("recent", data_iso, (r.text.splitlines()[-1]).split("sha256:")[1])
-            )
         else:
             # Get the latest recent file
             f_json = [await download_and_extract_gz(recents_url)]
-            meta = [("recent", data_iso, (r.text.splitlines()[-1]).split("sha256:")[1])]
+            meta = [
+                ("recent", data_iso_str, (r.text.splitlines()[-1]).split("sha256:")[1])
+            ]
 
         await insert_vulnerabilities(meta, f_json)
         logger.info("CVE DB updated with the latest changes")
@@ -206,7 +208,7 @@ async def init_db():
             (r.text.splitlines()[0]).split("lastModifiedDate:")[1]
         ).astimezone()
         nvd_chcksum = (r.text.splitlines()[-1]).split("sha256:")[1]
-        meta.append((year, nvd_date, nvd_chcksum))
+        meta.append((str(year), str(nvd_date), nvd_chcksum))
 
         url = f"https://nvd.nist.gov/feeds/json/cve/2.0/nvdcve-2.0-{year}.json.gz"
         f_names.append(await download_and_extract_gz(url))
@@ -242,8 +244,10 @@ def parse_nvd_data(data):
     for vuln in data:
         id = vuln["cve"]["id"]
         sid = vuln["cve"]["sourceIdentifier"]
-        pub = vuln["cve"]["published"]
-        last_mod = vuln["cve"]["lastModified"]
+        pub = datetime.fromisoformat(vuln["cve"]["published"].replace("Z", "+00:00"))
+        last_mod = datetime.fromisoformat(
+            vuln["cve"]["lastModified"].replace("Z", "+00:00")
+        )
         status = vuln["cve"]["vulnStatus"]
         references = ""
         for ref in vuln["cve"]["references"]:

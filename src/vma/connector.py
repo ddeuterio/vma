@@ -1,4 +1,5 @@
 import os
+import json
 from typing import Optional
 
 from loguru import logger
@@ -91,7 +92,7 @@ queries = {
     "insert_cve": """
         INSERT INTO vulnerabilities
             (cve_id, source_identifier, published_date, last_modified, vuln_status, refs, descriptions, weakness, configurations)
-        VALUES $1
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         ON CONFLICT (cve_id)
         DO UPDATE SET
             cve_id = EXCLUDED.cve_id,
@@ -107,7 +108,7 @@ queries = {
     "insert_cvss": """
         INSERT INTO cvss_metrics
             (cve_id, source, cvss_version, vector_string, base_score, base_severity)
-        VALUES $1
+        VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (cve_id, source, cvss_version)
         DO UPDATE SET
             vector_string = EXCLUDED.vector_string,
@@ -594,7 +595,7 @@ queries = {
     "insert_osv_vulnerability": """
         INSERT INTO osv_vulnerabilities
             (osv_id, schema_version, modified, published, withdrawn, summary, details, database_specific)
-        VALUES $1
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (osv_id)
         DO UPDATE SET
             schema_version = EXCLUDED.schema_version,
@@ -608,29 +609,29 @@ queries = {
     "insert_osv_alias": """
         INSERT INTO osv_aliases
             (osv_id, alias)
-        VALUES $1
+        VALUES ($1, $2)
         ON CONFLICT (osv_id, alias)
         DO NOTHING;
     """,
     "insert_osv_reference": """
         INSERT INTO osv_references
             (osv_id, ref_type, url)
-        VALUES $1;
+        VALUES ($1, $2, $3);
     """,
     "insert_osv_severity": """
         INSERT INTO osv_severity
             (osv_id, severity_type, score)
-        VALUES $1;
+        VALUES ($1, $2, $3);
     """,
     "insert_osv_affected": """
         INSERT INTO osv_affected
             (osv_id, package_ecosystem, package_name, package_purl, ranges, versions, ecosystem_specific, database_specific)
-        VALUES $1;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
     """,
     "insert_osv_credit": """
         INSERT INTO osv_credits
             (osv_id, name, contact, credit_type)
-        VALUES $1;
+        VALUES ($1, $2, $3, $4);
     """,
     "delete_osv_references": """
         DELETE FROM osv_references WHERE osv_id = $1;
@@ -840,7 +841,7 @@ async def insert_year_data(value) -> bool:
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
-            await conn.execute(queries["insert_fetch_date"], value)
+            await conn.execute(queries["insert_fetch_date"], *value)
             logger.debug(f"Last fetched date was updated to {str(value)}")
     except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
@@ -866,6 +867,9 @@ async def insert_vulnerabilities(data_cve: list, data_cvss: list) -> dict:
     try:
         async with pool.acquire() as conn:
             async with conn.transaction():
+                await conn.set_type_codec(
+                    "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+                )
                 await conn.executemany(queries["insert_cve"], data_cve)
                 await conn.executemany(queries["insert_cvss"], data_cvss)
     except asyncpg.PostgresError as e:
@@ -1477,7 +1481,9 @@ async def update_users(
                     await conn.execute(
                         queries["update_user_password_name"], password, name, email
                     )
+
                 else:
+                    # Edge case: multiple fields or complex combinations
                     # Build query dynamically with correct $N notation
                     update_fields = []
                     fields = []
@@ -2000,7 +2006,9 @@ async def insert_osv_data(
 
             if data_severity:
                 async with conn.transaction():
-                    await conn.execute(queries["insert_osv_severity"], data_severity)
+                    await conn.executemany(
+                        queries["insert_osv_severity"], data_severity
+                    )
 
             if data_affected:
                 async with conn.transaction():

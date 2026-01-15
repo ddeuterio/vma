@@ -41,7 +41,9 @@ def setup_args():
         "--host", default="0.0.0.0", help="Define the IP to run it on"
     )
     importer.add_argument("--type", choices=["grype"], help="Scanner type")
-    importer.add_argument("--api-version", choices=["v1"], default="v1", help="API version to use")
+    importer.add_argument(
+        "--api-version", choices=["v1"], default="v1", help="API version to use"
+    )
     importer.add_argument("--product", help="Product ID")
     importer.add_argument("--image", help="Image ID")
     importer.add_argument("--version", help="Image version")
@@ -118,7 +120,9 @@ async def main():
                     url=url,
                     json=payload,
                     headers=headers,
-                    verify=(not args.ignore_cert) if hasattr(args, 'ignore_cert') else True
+                    verify=(not args.ignore_cert)
+                    if hasattr(args, "ignore_cert")
+                    else True,
                 )
                 res_json = res.json()
             if res_json["status"]:
@@ -140,6 +144,11 @@ async def main():
         exit(0)
 
 
-if __name__ == "__main__":
+def cli():
+    """Synchronous entry point for CLI."""
     helper.configure_logging(logging.DEBUG)
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    cli()
