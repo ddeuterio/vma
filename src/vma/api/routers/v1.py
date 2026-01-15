@@ -707,7 +707,7 @@ async def token(
             secure=True,
             samesite="lax",
             max_age=(a._expire_refresh_token * 24 * 60 * 60),
-            path="/refresh",
+            path="/api/v1/refresh_token",
         )
     except Exception as e:
         logger.error(f"Failing to authenticate user {e}")
@@ -756,7 +756,7 @@ async def refresh(request: Request, response: Response) -> dict:
             secure=True,
             samesite="lax",
             max_age=(a._expire_refresh_token * 24 * 60 * 60),
-            path="/refresh",
+            path="/api/v1/refresh_token",
         )
     except Exception as e:
         logger.error(f"Error processing the request {e}")
@@ -778,7 +778,7 @@ async def logout(request: Request, response: Response) -> dict:
         secure=True,
         samesite="lax",
         max_age=0,
-        path="/refresh",
+        path="/api/v1/refresh_token",
     )
     return {"status": True, "result": "User has logout"}
 
@@ -844,8 +844,10 @@ async def create_api_token(
     return res
 
 
-@router.get("/tokens")
-async def list_api_tokens(user_data: mod_v1.JwtData = Depends(a.validate_access_token)):
+@router.get("/tokens/{user}")
+async def list_api_tokens(
+    user: str, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
+):
     """
     List API tokens.
 
@@ -855,15 +857,19 @@ async def list_api_tokens(user_data: mod_v1.JwtData = Depends(a.validate_access_
     Tokens are never returned in plaintext (only prefixes shown).
     """
     res = None
+    user_val = helper.validate_input(user)
+
+    if not user_data.root or (user_val != user_data.username):
+        raise HTTPException(status_code=401, detail="Unauthorized operation")
+
     try:
         is_root = user_data.root
+        q = None
         if is_root:
-            q = await c.list_api_tokens()
-        else:
-            q = await c.list_api_tokens(user_email=user_data.username)
+            q = await c.list_api_tokens(user_email=user_val)
 
-        if not q["status"]:
-            raise HTTPException(status_code=500, detail=q["result"])
+        if not q or not q["status"]:
+            raise HTTPException(status_code=500, detail=helper.errors["500"])
 
         tokens = q["result"]
         for token in tokens:
@@ -963,11 +969,9 @@ async def update_db(
     res = {"status": True, "result": "Action triggered"}
     try:
         if db_val == "nvd":
-            # endpoint does not need to wait for this to finish
-            await nvd.get_modified_cves()
+            await nvd.get_modified_cves()  # TODO: Use queues for this type of tasks
         elif db_val == "osv":
-            # endpoint does not need to wait for this to finish
-            await osv.get_recent()
+            await osv.get_recent()  # TODO: use queues for this type of tasks
     except Exception as e:
         logger.error(f"Error updating database {db_val}: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
