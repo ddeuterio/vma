@@ -428,7 +428,9 @@
         message.hide();
 
         try {
-            const tokens = await fetchJSON(apiUrl('/tokens'));
+            const claims = auth.getUserClaims?.();
+            const email = claims?.username || '';
+            const tokens = await fetchJSON(apiUrl(`/tokens/${encodeURIComponent(email)}`));
 
             clearElement(container);
 
