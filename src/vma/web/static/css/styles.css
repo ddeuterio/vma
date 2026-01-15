@@ -1579,8 +1579,7 @@ body {
 }
 
 .db-field {
-    display: grid;
-    grid-template-columns: 180px 1fr;
+    display: table-column;
     gap: 12px;
     padding: 12px 0;
     border-bottom: 1px solid rgba(0, 0, 0, 0.08);
