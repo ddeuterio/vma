@@ -53,6 +53,7 @@ services:
     - .env
     depends_on:
     - rev_proxy
+    restart: always
 
 volumes:
   pgdata:
