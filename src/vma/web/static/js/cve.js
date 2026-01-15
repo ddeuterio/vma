@@ -764,7 +764,58 @@ function renderConfigurationGroups(groups) {
         return card;
     }
 
+    // Database update functions (admin-only)
+    function showUpdateMessage(message, type) {
+        let msgEl = document.getElementById('updateMessage');
+        if (!msgEl) {
+            const updateGroup = document.querySelector('.hero-update-group');
+            if (!updateGroup) {
+                return;
+            }
+            msgEl = createElementWithAttrs('div', '', {
+                id: 'updateMessage',
+                class: 'update-message'
+            });
+            updateGroup.appendChild(msgEl);
+        }
+
+        msgEl.textContent = message;
+        msgEl.className = `update-message ${type}`;
+        msgEl.hidden = false;
+
+        setTimeout(() => {
+            msgEl.hidden = true;
+        }, 5000);
+    }
+
+    async function triggerDatabaseUpdate() {
+        const sourceSelect = document.getElementById('sourceSelect');
+        const updateBtn = document.getElementById('updateDbBtn');
+        const source = sourceSelect?.value || 'nvd';
+
+        if (!updateBtn) {
+            return;
+        }
+
+        updateBtn.disabled = true;
+        const originalContent = updateBtn.innerHTML;
+        updateBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Updating...';
+
+        try {
+            await fetchJSON(apiUrl(`/update/${source}`), {
+                method: 'POST'
+            });
+            showUpdateMessage(`${source.toUpperCase()} database update triggered`, 'success');
+        } catch (error) {
+            showUpdateMessage(error.message || 'Update failed', 'error');
+        } finally {
+            updateBtn.disabled = false;
+            updateBtn.innerHTML = originalContent;
+        }
+    }
+
     function renderSearchPage() {
+        console.log('starting renderSearchPage')
         const root = document.getElementById('vmaContent');
         if (!root) {
             return null;
@@ -806,6 +857,20 @@ function renderConfigurationGroups(groups) {
         sourceSelector.appendChild(sourceLabel);
         sourceSelector.appendChild(sourceSelect);
         heroHeader.appendChild(sourceSelector);
+
+        // Admin-only database update button
+        const updateGroup = createElementWithAttrs('div', '', {
+            class: 'hero-update-group',
+            'data-admin-only': ''
+        });
+        const updateBtn = document.createElement('button');
+        updateBtn.type = 'button';
+        updateBtn.id = 'updateDbBtn';
+        updateBtn.className = 'btn secondary';
+        updateBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Update Database';
+        updateGroup.appendChild(updateBtn);
+        heroHeader.appendChild(updateGroup);
+
         hero.appendChild(heroHeader);
 
         const searchBar = createElementWithAttrs('div', '', { class: 'search-bar' });
@@ -966,6 +1031,7 @@ function renderConfigurationGroups(groups) {
         state.sourceSelect.disabled = true;
 
         try {
+            console.log(`About to perform seach for term ${term}`)
             const payload = await fetchJSON(apiUrl(`/cve/${dataSource}/${encodeURIComponent(term)}`));
             const items = normaliseResult(payload, dataSource);
             renderResults(state, items, dataSource);
@@ -1001,6 +1067,12 @@ function renderConfigurationGroups(groups) {
                 triggerSearch();
             }
         });
+
+        // Wire up database update button (admin-only)
+        const updateBtn = document.getElementById('updateDbBtn');
+        if (updateBtn) {
+            updateBtn.addEventListener('click', triggerDatabaseUpdate);
+        }
 
         const initialQuery = new URL(window.location.href).searchParams.get('q');
         if (initialQuery) {
