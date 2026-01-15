@@ -106,7 +106,7 @@ def create_web_app():
                     secure=True,
                     samesite="lax",
                     max_age=a._expire_refresh_token * 24 * 60 * 60,
-                    path="/refresh",
+                    path="/api/v1/refresh",
                 )
         except Exception as e:
             logger.error(f"Error processing post request: {e}")
