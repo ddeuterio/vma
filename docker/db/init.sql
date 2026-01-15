@@ -32,7 +32,6 @@ CREATE TABLE vulnerabilities (
     descriptions JSONB,
     weakness JSONB,
     configurations JSONB
-
 );
 
 CREATE TABLE cvss_metrics (
