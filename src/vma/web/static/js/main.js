@@ -354,6 +354,7 @@
     }
 
     function dispatchRoute(route, meta = {}) {
+        console.log(`dispatch to route ${route}`)
         currentRoute = routeHandlers.has(route) ? route : 'dashboard';
         setActiveRoute(currentRoute);
         const handler = routeHandlers.get(currentRoute);
@@ -363,6 +364,7 @@
     }
 
     function navigate(route, { replace = false } = {}) {
+        console.log(`navigate to ${route}`)
         const targetRoute = routeHandlers.has(route) ? route : 'dashboard';
         const targetPath = routeToPath(targetRoute);
         const state = { route: targetRoute };
@@ -377,6 +379,7 @@
     }
 
     function registerRoute(route, handler) {
+        console.log(`register route ${route}`)
         if (!route || typeof handler !== 'function') {
             return;
         }
