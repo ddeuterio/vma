@@ -25,6 +25,15 @@ class Import(BaseModel):
     data: list
 
 
+class ImportSca(BaseModel):
+    scanner: str
+    image_name: str
+    image_version: str
+    product: str
+    team: str
+    vulnerabilities: list  # List of VulnerabilitySca dicts
+
+
 class Team(BaseModel):
     name: str
     description: str | None = None

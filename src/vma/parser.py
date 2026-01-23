@@ -1,8 +1,75 @@
 import json
-
 import aiofiles
 from loguru import logger
 from datetime import datetime
+
+
+async def grype_parser(path: str) -> list:
+    pass
+    json_data = None
+    async with aiofiles.open(path, "r") as f:
+        content = await f.read()
+        json_data = json.loads(content)
+
+    ret = []
+    for vuln in json_data["matches"]:
+        vuln_sca = {}
+        severity = (
+            vuln["vulnerability"]["severity"]
+            if "severity" in vuln["vulnerability"]
+            else ""
+        )
+        cvss = vuln["vulnerability"]["cvss"] if "cvss" in vuln["vulnerability"] else []
+        epss = vuln["vulnerability"]["epss"] if "epss" in vuln["vulnerability"] else []
+        vuln_sca["severity"] = {"value": severity, "cvss": cvss, "epss": epss}
+        vuln_sca["id"] = (
+            vuln["vulnerability"]["id"] if "id" in vuln["vulnerability"] else ""
+        )
+        vuln_sca["source"] = (
+            vuln["vulnerability"]["dataSource"]
+            if "dataSource" in vuln["vulnerability"]
+            else ""
+        )
+        vuln_sca["urls"] = (
+            vuln["vulnerability"]["urls"] if "urls" in vuln["vulnerability"] else []
+        )
+        vuln_sca["description"] = (
+            vuln["vulnerability"]["description"]
+            if "description" in vuln["vulnerability"]
+            else ""
+        )
+        vuln_sca["cwes"] = (
+            vuln["vulnerability"]["cwes"] if "cwes" in vuln["vulnerability"] else [{}]
+        )
+        vuln_sca["fix"] = (
+            vuln["vulnerability"]["fix"] if "fix" in vuln["vulnerability"] else {}
+        )
+        vuln_sca["related_vulnerabilities"] = (
+            vuln["relatedVulnerabilities"]
+            if "relatedVulnerabilities" in vuln["vulnerability"]
+            else []
+        )
+
+        # Extract artifact data
+        vuln_sca["affected_component_type"] = (
+            vuln["artifact"]["type"] if "type" in vuln["artifact"] else ""
+        )
+        vuln_sca["affected_component"] = (
+            vuln["artifact"]["name"] if "name" in vuln["artifact"] else ""
+        )
+        vuln_sca["affected_version"] = (
+            vuln["artifact"]["version"] if "version" in vuln["artifact"] else ""
+        )
+        locations = ""
+        if "locations" in vuln["artifact"]:
+            for loc in vuln["artifact"]["locations"]:
+                locations += f"{loc['path']},"
+            locations = locations[:-1] if locations else ""
+        vuln_sca["affected_path"] = locations
+
+        ret.append(vuln_sca)
+    logger.debug(f"A total of {len(ret)} CVEs has been identified when parsing")
+    return ret
 
 
 async def grype_parse_report(metadata, path):

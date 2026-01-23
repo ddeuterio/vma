@@ -90,7 +90,9 @@ async def main():
             url = "http"
             if args.secure:
                 url += "s"
-            url += f"://{args.host}:{args.port}/api/{args.api_version}/import"
+            url += (
+                f"://{args.host}:{args.port}/api/{args.api_version}/vulnerabilities-sca"
+            )
             headers = {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
@@ -98,31 +100,21 @@ async def main():
             payload = None
 
             if args.type == "grype":
-                # image_metadata = par.grype_get_image_metadata(file)
-                image_metadata = [
-                    args.type,
-                    args.image,
-                    args.version,
-                    args.product,
-                    args.team,
-                ]
-                data = await par.grype_parse_report(image_metadata, file)
+                data = await par.grype_parser(path=file)
                 payload = {
                     "scanner": args.type,
                     "product": args.product,
-                    "image": args.image,
-                    "version": args.version,
+                    "image_name": args.image,
+                    "image_version": args.version,
                     "team": args.team,
-                    "data": data,
+                    "vulnerabilities": data,
                 }
-            async with httpx.AsyncClient() as client:
+            verify_ssl = not args.ignore_cert if hasattr(args, "ignore_cert") else True
+            async with httpx.AsyncClient(verify=verify_ssl) as client:
                 res = await client.post(
                     url=url,
                     json=payload,
                     headers=headers,
-                    verify=(not args.ignore_cert)
-                    if hasattr(args, "ignore_cert")
-                    else True,
                 )
                 res_json = res.json()
             if res_json["status"]:

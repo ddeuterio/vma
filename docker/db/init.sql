@@ -186,6 +186,54 @@ CREATE TABLE image_vulnerabilities (
 
 CREATE INDEX idx_image_vuln_team ON image_vulnerabilities(team);
 
+-- Standalone SCA vulnerability storage
+-- Maps directly to VulnerabilitySca Pydantic model
+-- No dependency on NVD vulnerabilities table
+CREATE TABLE vulnerabilities_sca (
+    -- Primary identification
+    scanner TEXT NOT NULL,
+    vuln_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+
+    -- Image linkage
+    image_name TEXT NOT NULL,
+    image_version TEXT NOT NULL,
+    product TEXT NOT NULL,
+    team TEXT NOT NULL REFERENCES teams(name) ON DELETE CASCADE,
+
+    -- Core vulnerability data
+    description TEXT,
+    severity_level TEXT,
+
+    -- Artifact/component data
+    affected_component_type TEXT NOT NULL,
+    affected_component TEXT NOT NULL,
+    affected_version TEXT NOT NULL,
+    affected_path TEXT NOT NULL,
+
+    -- JSONB for complex nested data
+    cvss JSONB DEFAULT '[]'::jsonb,
+    epss JSONB DEFAULT '[]'::jsonb,
+    urls JSONB DEFAULT '[]'::jsonb,
+    cwes JSONB DEFAULT '[]'::jsonb,
+    fix JSONB DEFAULT '{}'::jsonb,
+    related_vulnerabilities JSONB DEFAULT '[]'::jsonb,
+
+    -- Composite primary key: scanner + vuln + image + artifact
+    PRIMARY KEY (scanner, vuln_id, image_name, image_version, product, team, affected_component, affected_version),
+
+    -- Foreign key to images table
+    FOREIGN KEY (image_name, image_version, product, team)
+        REFERENCES images(name, version, product, team)
+        ON DELETE CASCADE
+);
+
+-- Performance indexes
+CREATE INDEX idx_vuln_sca_team ON vulnerabilities_sca(team);
+CREATE INDEX idx_vuln_sca_severity ON vulnerabilities_sca(severity_level);
+CREATE INDEX idx_vuln_sca_vuln_id ON vulnerabilities_sca(vuln_id);
+CREATE INDEX idx_vuln_sca_image ON vulnerabilities_sca(image_name, image_version);
+
 CREATE TABLE api_tokens (
     id SERIAL PRIMARY KEY,
     token_hash TEXT UNIQUE NOT NULL,

@@ -310,7 +310,7 @@ queries = {
     """,
     "insert_image_vulnerabilities": """
         INSERT INTO image_vulnerabilities
-            (scanner, image_name, image_version, product, team, cve, fix_versions, first_seen, last_seen, affected_component_type, affected_component, affected_version, affected_path)
+            (scanner, image_name, image_version, product, team, cve, fix_versions, affected_component_type, affected_component, affected_version, affected_path)
         VALUES
             $1
         ON CONFLICT
@@ -727,6 +727,46 @@ queries = {
             osv_vulnerabilities ov ON oa.osv_id = ov.osv_id
         WHERE
             nv.cve_id = $1;
+    """,
+    "insert_vulnerability_sca": """
+        INSERT INTO vulnerabilities_sca
+            (scanner, vuln_id, source, image_name, image_version, product, team,
+             description, severity_level,
+             affected_component_type, affected_component, affected_version, affected_path,
+             cvss, epss, urls, cwes, fix, related_vulnerabilities)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+        ON CONFLICT (scanner, vuln_id, image_name, image_version, product, team, affected_component, affected_version)
+        DO UPDATE SET
+            source = EXCLUDED.source,
+            description = EXCLUDED.description,
+            severity_level = EXCLUDED.severity_level,
+            affected_component_type = EXCLUDED.affected_component_type,
+            affected_path = EXCLUDED.affected_path,
+            cvss = EXCLUDED.cvss,
+            epss = EXCLUDED.epss,
+            urls = EXCLUDED.urls,
+            cwes = EXCLUDED.cwes,
+            fix = EXCLUDED.fix,
+            related_vulnerabilities = EXCLUDED.related_vulnerabilities;
+    """,
+    "get_vulnerabilities_sca_by_image": """
+        SELECT scanner, vuln_id, source, description, severity_level,
+               affected_component_type, affected_component, affected_version, affected_path,
+               cvss, epss, urls, cwes, fix, related_vulnerabilities
+        FROM vulnerabilities_sca
+        WHERE image_name = $1
+          AND image_version = $2
+          AND product = $3
+          AND team = $4
+        ORDER BY severity_level DESC, vuln_id;
+    """,
+    "get_vulnerability_sca_by_id": """
+        SELECT scanner, vuln_id, source, image_name, image_version, product, team,
+               description, severity_level,
+               affected_component_type, affected_component, affected_version, affected_path,
+               cvss, epss, urls, cwes, fix, related_vulnerabilities
+        FROM vulnerabilities_sca
+        WHERE vuln_id = $1 AND team = $2;
     """,
 }
 
@@ -1743,7 +1783,7 @@ async def get_api_token_by_hash(token_hash: str) -> dict:
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
-            q = await conn.fetch(queries["get_api_token_by_hash"], token_hash)
+            q = await conn.fetchrow(queries["get_api_token_by_hash"], token_hash)
 
         if not q:
             logger.debug("Token not found")
@@ -1781,7 +1821,7 @@ async def get_api_token_by_prefix(prefix: str) -> dict:
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
-            q = await conn.fetch(queries["get_api_token_by_prefix"], prefix)
+            q = await conn.fetchrow(queries["get_api_token_by_prefix"], prefix)
 
         if not q:
             logger.debug("Token not found")
@@ -1811,12 +1851,11 @@ async def get_api_token_by_id(token_id: int) -> dict:
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
-            q = await conn.fetch(queries["get_api_token_by_id"], token_id)
+            q = await conn.fetchrow(queries["get_api_token_by_id"], token_id)
 
         if not q:
             logger.debug("Token not found")
             res["result"] = "Token not found"
-            res["status"] = True
             return res
 
         res = {
@@ -2132,4 +2171,252 @@ async def get_osv_by_ilike_id(osv_id: str) -> dict:
         logger.error(f"Error getting OSV: {e}")
         res["status"] = False
         res["result"] = []
+    return res
+
+
+async def insert_vulnerability_sca(
+    vuln: dict,
+    image_name: str,
+    image_version: str,
+    product: str,
+    team: str,
+    scanner: str,
+) -> dict:
+    """
+    Insert or update a VulnerabilitySca record.
+
+    Args:
+        vuln: Dict containing vulnerability data matching VulnerabilitySca model
+        image_name: Name of the container image
+        image_version: Version of the container image
+        product: Product ID
+        team: Team name
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": "Vulnerability inserted"}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            await conn.set_type_codec(
+                "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+            )
+            await conn.execute(
+                queries["insert_vulnerability_sca"],
+                scanner,
+                vuln["id"],
+                vuln["source"],
+                image_name,
+                image_version,
+                product,
+                team,
+                vuln.get("description", ""),
+                vuln["severity"]["value"],
+                vuln.get("affected_component_type", ""),
+                vuln.get("affected_component", ""),
+                vuln.get("affected_version", ""),
+                vuln.get("affected_path", ""),
+                vuln["severity"].get("cvss", []),
+                vuln["severity"].get("epss", []),
+                vuln.get("urls", []),
+                vuln.get("cwes", []),
+                vuln.get("fix", {}),
+                vuln.get("related_vulnerabilities", []),
+            )
+        logger.debug(
+            f"Inserted vulnerability {vuln['id']} for image {image_name}:{image_version}"
+        )
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error in insert_vulnerability_sca: {e}")
+        res = {"status": False, "result": str(e)}
+    except Exception as e:
+        logger.error(f"Error in insert_vulnerability_sca: {e}")
+        res = {"status": False, "result": str(e)}
+    return res
+
+
+async def insert_vulnerabilities_sca_batch(
+    vulns: list[dict],
+    image_name: str,
+    image_version: str,
+    product: str,
+    team: str,
+    scanner: str,
+) -> dict:
+    """
+    Batch insert multiple VulnerabilitySca records.
+
+    Args:
+        vulns: List of dicts containing vulnerability data matching VulnerabilitySca model
+        image_name: Name of the container image
+        image_version: Version of the container image
+        product: Product ID
+        team: Team name
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": f"Inserted {len(vulns)} vulnerabilities"}
+    pool = await get_pool()
+    try:
+        values = []
+        for v in vulns:
+            values.append(
+                (
+                    scanner,
+                    v["id"],
+                    v["source"],
+                    image_name,
+                    image_version,
+                    product,
+                    team,
+                    v.get("description", ""),
+                    v["severity"]["value"],
+                    v.get("affected_component_type", ""),
+                    v.get("affected_component", ""),
+                    v.get("affected_version", ""),
+                    v.get("affected_path", ""),
+                    json.dumps(v["severity"].get("cvss", [])),
+                    json.dumps(v["severity"].get("epss", [])),
+                    json.dumps(v.get("urls", [])),
+                    json.dumps(v.get("cwes", [])),
+                    json.dumps(v.get("fix", {})),
+                    json.dumps(v.get("related_vulnerabilities", [])),
+                )
+            )
+
+        async with pool.acquire() as conn:
+            await conn.executemany(queries["insert_vulnerability_sca"], values)
+
+        logger.debug(
+            f"Batch inserted {len(vulns)} vulnerabilities for {image_name}:{image_version}"
+        )
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error in insert_vulnerabilities_sca_batch: {e}")
+        res = {"status": False, "result": str(e)}
+    except Exception as e:
+        logger.error(f"Error in insert_vulnerabilities_sca_batch: {e}")
+        res = {"status": False, "result": str(e)}
+    return res
+
+
+async def get_vulnerabilities_sca_by_image(
+    image_name: str,
+    image_version: str,
+    product: str,
+    team: str,
+) -> dict:
+    """
+    Get all VulnerabilitySca records for an image.
+
+    Args:
+        image_name: Name of the container image
+        image_version: Version of the container image
+        product: Product ID
+        team: Team name
+
+    Returns:
+        dict structure with 'status' and 'result' containing list of vulnerabilities
+    """
+    res = {"status": True, "result": []}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                queries["get_vulnerabilities_sca_by_image"],
+                image_name,
+                image_version,
+                product,
+                team,
+            )
+
+        if rows:
+            for row in rows:
+                res["result"].append(
+                    {
+                        "scanner": row[0],
+                        "vuln_id": row[1],
+                        "source": row[2],
+                        "description": row[3],
+                        "severity_level": row[4],
+                        "affected_component_type": row[5],
+                        "affected_component": row[6],
+                        "affected_version": row[7],
+                        "affected_path": row[8],
+                        "cvss": row[9],
+                        "epss": row[10],
+                        "urls": row[11],
+                        "cwes": row[12],
+                        "fix": row[13],
+                        "related_vulnerabilities": row[14],
+                    }
+                )
+        logger.debug(
+            f"Found {len(res['result'])} SCA vulnerabilities for {image_name}:{image_version}"
+        )
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error in get_vulnerabilities_sca_by_image: {e}")
+        res = {"status": False, "result": str(e)}
+    except Exception as e:
+        logger.error(f"Error in get_vulnerabilities_sca_by_image: {e}")
+        res = {"status": False, "result": str(e)}
+    return res
+
+
+async def get_vulnerability_sca_by_id(vuln_id: str, team: str) -> dict:
+    """
+    Get VulnerabilitySca records by vulnerability ID within a team.
+
+    Args:
+        vuln_id: Vulnerability ID (e.g., CVE-2024-1234)
+        team: Team name
+
+    Returns:
+        dict structure with 'status' and 'result' containing list of vulnerabilities
+    """
+    res = {"status": True, "result": []}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                queries["get_vulnerability_sca_by_id"],
+                vuln_id,
+                team,
+            )
+
+        if rows:
+            for row in rows:
+                res["result"].append(
+                    {
+                        "scanner": row[0],
+                        "vuln_id": row[1],
+                        "source": row[2],
+                        "image_name": row[3],
+                        "image_version": row[4],
+                        "product": row[5],
+                        "team": row[6],
+                        "description": row[7],
+                        "severity_level": row[8],
+                        "affected_component_type": row[9],
+                        "affected_component": row[10],
+                        "affected_version": row[11],
+                        "affected_path": row[12],
+                        "cvss": row[13],
+                        "epss": row[14],
+                        "urls": row[15],
+                        "cwes": row[16],
+                        "fix": row[17],
+                        "related_vulnerabilities": row[18],
+                    }
+                )
+        logger.debug(
+            f"Found {len(res['result'])} SCA vulnerabilities for {vuln_id} in team {team}"
+        )
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error in get_vulnerability_sca_by_id: {e}")
+        res = {"status": False, "result": str(e)}
+    except Exception as e:
+        logger.error(f"Error in get_vulnerability_sca_by_id: {e}")
+        res = {"status": False, "result": str(e)}
     return res

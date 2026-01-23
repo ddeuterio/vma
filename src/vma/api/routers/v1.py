@@ -367,6 +367,119 @@ async def importer(
     return res
 
 
+@router.post("/vulnerabilities-sca")
+async def import_vulnerabilities_sca(
+    imp: mod_v1.ImportSca,
+    user_data: dict = Depends(a.validate_api_token),
+) -> dict:
+    """
+    Import VulnerabilitySca records for an image.
+
+    This endpoint accepts SCA vulnerability data that maps directly to the
+    VulnerabilitySca model, storing it independently from the NVD database.
+    """
+    scanner = helper.validate_input(imp.scanner)
+    image_name = helper.validate_input(imp.image_name)
+    image_version = helper.validate_input(imp.image_version)
+    product = helper.validate_input(imp.product)
+    team = helper.validate_input(imp.team)
+    vulnerabilities = imp.vulnerabilities
+
+    if not user_data["status"]:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not is_authorized(
+        is_root=user_data["result"]["root"],
+        scope=user_data["result"]["teams"],
+        teams=[team],
+        op=WRITE,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not image_name or not image_version or not product or not team:
+        raise HTTPException(status_code=400, detail=helper.errors["400"])
+
+    if not vulnerabilities or len(vulnerabilities) == 0:
+        raise HTTPException(status_code=400, detail="No vulnerabilities provided")
+
+    res = None
+    try:
+        # Ensure image exists
+        chk = await c.get_images(
+            name=image_name, version=image_version, product=product, teams=[team]
+        )
+        if not chk["result"]:
+            await c.insert_image(
+                name=image_name, version=image_version, product=product, team=team
+            )
+
+        res = await c.insert_vulnerabilities_sca_batch(
+            vulns=vulnerabilities,
+            image_name=image_name,
+            image_version=image_version,
+            product=product,
+            team=team,
+            scanner=scanner,
+        )
+
+        if not res["status"]:
+            raise HTTPException(status_code=500, detail=res["result"])
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error importing SCA vulnerabilities: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
+
+
+@router.get("/image/{t}/{p}/{n}/{ver}/vuln-sca")
+async def image_vuln_sca(
+    t: str,
+    p: str,
+    n: str,
+    ver: str,
+    user_data: mod_v1.JwtData = Depends(a.validate_access_token),
+) -> dict:
+    """
+    Get SCA vulnerabilities for a specific image.
+
+    Returns VulnerabilitySca records stored independently from NVD data.
+    """
+    team = helper.validate_input(t)
+    name = helper.validate_input(n)
+    version = helper.validate_input(ver)
+    product = helper.validate_input(p)
+
+    if not is_authorized(
+        is_root=user_data.root, scope=user_data.scope, teams=[team], op=READ_ONLY
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not team or not name or not version or not product:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+        )
+
+    res = None
+    try:
+        res = await c.get_vulnerabilities_sca_by_image(
+            image_name=name,
+            image_version=version,
+            product=product,
+            team=team,
+        )
+    except Exception as e:
+        logger.error(f"Error getting SCA vulnerabilities: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
+
+
 @router.delete("/product/{t}/{id}")
 async def delete_product(
     t: str, id: str, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
@@ -923,7 +1036,6 @@ async def revoke_api_token(
     """
     try:
         q = await c.get_api_token_by_id(token_id)
-
         if not q["status"]:
             raise HTTPException(status_code=404, detail="Token not found")
 
