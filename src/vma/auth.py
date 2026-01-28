@@ -78,7 +78,7 @@ def validate_access_token(
             not payload["sub"]
             or not payload["type"]
             or not payload["scope"]
-            or payload["type"] != "access_token"
+            or payload["type"] not in ["access_token"]
         ):
             raise cred_exception
         data = mod_v1.JwtData(
@@ -91,6 +91,24 @@ def validate_access_token(
         logger.error(f"Error: {e}")
         raise cred_exception
     return data
+
+
+def validate_refresh_token(
+    token: str,
+) -> bool:
+    if not token:
+        return False
+
+    payload = jwt.decode(jwt=token, key=_secret_key_refresh, algorithms=[_algorithm])
+
+    if (
+        not payload["sub"]
+        or not payload["type"]
+        or not payload["scope"]
+        or payload["type"] not in ["refresh_token"]
+    ):
+        return False
+    return True
 
 
 async def is_authenticated(request: Request) -> mod_v1.JwtData | None:

@@ -1,12 +1,12 @@
 from __future__ import annotations
-from typing import Any
+from typing import Any, Annotated
 
 import os
 import logging
 from loguru import logger
 from pathlib import Path
 from httpx import AsyncClient
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status, Cookie
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -106,7 +106,7 @@ def create_web_app():
                     secure=True,
                     samesite="lax",
                     max_age=a._expire_refresh_token * 24 * 60 * 60,
-                    path="/api/v1/refresh",
+                    path="/",
                 )
         except Exception as e:
             logger.error(f"Error processing post request: {e}")
@@ -120,9 +120,11 @@ def create_web_app():
 
     @app.get("/")
     async def index(
-        request: Request, user_data: mod_v1.JwtData | None = Depends(a.is_authenticated)
+        request: Request,
+        user_data: mod_v1.JwtData | None = Depends(a.is_authenticated),
+        refresh_token: Annotated[str | None, Cookie()] = None,
     ) -> Any:
-        if user_data is None:
+        if user_data is None and not a.validate_refresh_token(refresh_token):
             logger.debug("User is not authenticated, render login page")
             return _render_page(
                 request=request, template_name="login.html", context={}, tokens={}

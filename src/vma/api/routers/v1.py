@@ -1003,7 +1003,7 @@ async def token(
             secure=True,
             samesite="lax",
             max_age=(a._expire_refresh_token * 24 * 60 * 60),
-            path="/api/v1/refresh_token",
+            path="/",
         )
     except Exception as e:
         logger.error(f"Failing to authenticate user {e}")
@@ -1052,7 +1052,7 @@ async def refresh(request: Request, response: Response) -> dict:
             secure=True,
             samesite="lax",
             max_age=(a._expire_refresh_token * 24 * 60 * 60),
-            path="/api/v1/refresh_token",
+            path="/",
         )
     except Exception as e:
         logger.error(f"Error processing the request {e}")
@@ -1074,7 +1074,7 @@ async def logout(request: Request, response: Response) -> dict:
         secure=True,
         samesite="lax",
         max_age=0,
-        path="/api/v1/refresh_token",
+        path="/",
     )
     return {"status": True, "result": "User has logout"}
 
