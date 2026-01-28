@@ -91,7 +91,7 @@ async def main():
             if args.secure:
                 url += "s"
             url += (
-                f"://{args.host}:{args.port}/api/{args.api_version}/vulnerabilities-sca"
+                f"://{args.host}:{args.port}/api/{args.api_version}/import/sca"
             )
             headers = {
                 "Authorization": f"Bearer {token}",

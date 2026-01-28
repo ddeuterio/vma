@@ -221,53 +221,53 @@ async def image(
     return res
 
 
-@router.get("/image/{t}/{p}/{n}/{ver}/vuln")
-async def image_vuln(
-    t: str,
-    p: str,
-    n: str,
-    ver: str,
-    user_data: mod_v1.JwtData = Depends(a.validate_access_token),
-) -> dict:
-    team = helper.validate_input(t)
-    name = helper.validate_input(n)
-    version = helper.validate_input(ver)
-    product = helper.validate_input(p)
+# @router.get("/image/{t}/{p}/{n}/{ver}/vuln")
+# async def image_vuln(
+#     t: str,
+#     p: str,
+#     n: str,
+#     ver: str,
+#     user_data: mod_v1.JwtData = Depends(a.validate_access_token),
+# ) -> dict:
+#     team = helper.validate_input(t)
+#     name = helper.validate_input(n)
+#     version = helper.validate_input(ver)
+#     product = helper.validate_input(p)
+#
+#     if not is_authorized(
+#         is_root=user_data.root, scope=user_data.scope, teams=[team], op=READ_ONLY
+#     ):
+#         raise HTTPException(
+#             status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+#         )
+#
+#     if not team or not name or not version or not product:
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+#         )
+#
+#     res = None
+#     try:
+#         res = await c.get_image_vulnerabilities(product, name, version, team)
+#         res["result"] = helper.format_vulnerability_rows(res["result"])
+#     except Exception as e:
+#         logger.error(f"Error getting image: {e}")
+#         raise HTTPException(status_code=500, detail=helper.errors["500"])
+#     return res
 
-    if not is_authorized(
-        is_root=user_data.root, scope=user_data.scope, teams=[team], op=READ_ONLY
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
-        )
 
-    if not team or not name or not version or not product:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
-        )
-
-    res = None
-    try:
-        res = await c.get_image_vulnerabilities(product, name, version, team)
-        res["result"] = helper.format_vulnerability_rows(res["result"])
-    except Exception as e:
-        logger.error(f"Error getting image: {e}")
-        raise HTTPException(status_code=500, detail=helper.errors["500"])
-    return res
-
-
-@router.get("/image/compare/{t}/{p}/{im}/{v1}/{v2}")
+@router.get("/image/compare/{t}/{p}/{n}/{v1}/{v2}")
 async def image_compare(
     t: str,
     p: str,
-    im: str,
+    n: str,
     v1: str,
     v2: str,
     user_data: mod_v1.JwtData = Depends(a.validate_access_token),
 ) -> dict:
     team = helper.validate_input(t)
     product = helper.validate_input(p)
-    image = helper.validate_input(im)
+    image = helper.validate_input(n)
     ver1 = helper.validate_input(v1)
     ver2 = helper.validate_input(v2)
 
@@ -322,52 +322,52 @@ async def cve(
     return res
 
 
-@router.post("/import")
-async def importer(
-    imp: mod_v1.Import, user_data: dict = Depends(a.validate_api_token)
-) -> dict:
-    sc = helper.validate_input(imp.scanner)
-    product = helper.validate_input(imp.product)
-    image = helper.validate_input(imp.image)
-    version = helper.validate_input(imp.version)
-    team = helper.validate_input(imp.team)
-    data = imp.data
+# @router.post("/import")
+# async def importer(
+#     imp: mod_v1.Import, user_data: dict = Depends(a.validate_api_token)
+# ) -> dict:
+#     sc = helper.validate_input(imp.scanner)
+#     product = helper.validate_input(imp.product)
+#     image = helper.validate_input(imp.image)
+#     version = helper.validate_input(imp.version)
+#     team = helper.validate_input(imp.team)
+#     data = imp.data
+#
+#     if not user_data["status"]:
+#         raise HTTPException(
+#             status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+#         )
+#
+#     if not is_authorized(
+#         is_root=user_data["result"]["root"],
+#         scope=user_data["result"]["teams"],
+#         teams=[team],
+#         op=WRITE,
+#     ):
+#         raise HTTPException(
+#             status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+#         )
+#
+#     if not data or len(data) < 0 or not image or not version or not product or not team:
+#         raise HTTPException(status_code=400, detail=helper.errors["400"])
+#
+#     res = None
+#     try:
+#         chk = await c.get_images(
+#             name=image, version=version, product=product, teams=[team]
+#         )
+#         if not chk["status"]:
+#             ins = await c.insert_image(
+#                 name=image, version=version, product=product, team=team
+#             )
+#         res = await c.insert_image_vulnerabilities(data)
+#     except Exception as e:
+#         logger.error(f"Error inserting vulnerabilities: {e}")
+#         raise HTTPException(status_code=500, detail=helper.errors["500"])
+#     return res
 
-    if not user_data["status"]:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
-        )
 
-    if not is_authorized(
-        is_root=user_data["result"]["root"],
-        scope=user_data["result"]["teams"],
-        teams=[team],
-        op=WRITE,
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
-        )
-
-    if not data or len(data) < 0 or not image or not version or not product or not team:
-        raise HTTPException(status_code=400, detail=helper.errors["400"])
-
-    res = None
-    try:
-        chk = await c.get_images(
-            name=image, version=version, product=product, teams=[team]
-        )
-        if not chk["status"]:
-            ins = await c.insert_image(
-                name=image, version=version, product=product, team=team
-            )
-        res = await c.insert_image_vulnerabilities(data)
-    except Exception as e:
-        logger.error(f"Error inserting vulnerabilities: {e}")
-        raise HTTPException(status_code=500, detail=helper.errors["500"])
-    return res
-
-
-@router.post("/vulnerabilities-sca")
+@router.post("/import/sca")
 async def import_vulnerabilities_sca(
     imp: mod_v1.ImportSca,
     user_data: dict = Depends(a.validate_api_token),
@@ -476,6 +476,189 @@ async def image_vuln_sca(
         )
     except Exception as e:
         logger.error(f"Error getting SCA vulnerabilities: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
+
+
+@router.post("/import/sast")
+async def import_vulnerabilities_sast(
+    imp: mod_v1.ImportSast,
+    user_data: dict = Depends(a.validate_api_token),
+) -> dict:
+    """Import SAST findings (e.g. from Semgrep)."""
+    scanner = helper.validate_input(imp.scanner)
+    product = helper.validate_input(imp.product)
+    team = helper.validate_input(imp.team)
+    findings = imp.findings
+
+    if not user_data["status"]:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not is_authorized(
+        is_root=user_data["result"]["root"],
+        scope=user_data["result"]["teams"],
+        teams=[team],
+        op=WRITE,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not product or not team or not scanner:
+        raise HTTPException(status_code=400, detail=helper.errors["400"])
+
+    if not findings or len(findings) == 0:
+        raise HTTPException(status_code=400, detail="No findings provided")
+
+    res = None
+    try:
+        # Verify product exists
+        chk = await c.get_products(teams=[team], id=product)
+        if not chk["result"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Product '{product}' not found in team '{team}'",
+            )
+
+        res = await c.insert_vulnerabilities_sast_batch(
+            findings=findings,
+            product=product,
+            team=team,
+            scanner=scanner,
+        )
+
+        if not res["status"]:
+            raise HTTPException(status_code=500, detail=res["result"])
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error importing SAST findings: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
+
+
+@router.get("/sast/{team}/{product}")
+async def get_vulnerabilities_sast_product(
+    team: str,
+    product: str,
+    user_data: mod_v1.JwtData = Depends(a.validate_access_token),
+) -> dict:
+    """Get SAST findings for a specific product."""
+    team_val = helper.validate_input(team)
+    product_val = helper.validate_input(product)
+
+    if not is_authorized(
+        is_root=user_data.root, scope=user_data.scope, teams=[team_val], op=READ_ONLY
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not team_val or not product_val:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+        )
+
+    res = None
+    try:
+        res = await c.get_vulnerabilities_sast_by_product(
+            product=product_val, team=team_val
+        )
+    except Exception as e:
+        logger.error(f"Error getting SAST findings: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
+
+
+@router.get("/sast/{team}")
+async def get_vulnerabilities_sast_team(
+    team: str,
+    user_data: mod_v1.JwtData = Depends(a.validate_access_token),
+) -> dict:
+    """Get all SAST findings for a team across all products."""
+    team_val = helper.validate_input(team)
+
+    if not is_authorized(
+        is_root=user_data.root, scope=user_data.scope, teams=[team_val], op=READ_ONLY
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not team_val:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+        )
+
+    res = None
+    try:
+        res = await c.get_vulnerabilities_sast_by_team(team=team_val)
+    except Exception as e:
+        logger.error(f"Error getting SAST findings for team: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
+
+
+@router.delete("/sast/{team}/{product}")
+async def delete_vulnerabilities_sast(
+    team: str,
+    product: str,
+    user_data: mod_v1.JwtData = Depends(a.validate_access_token),
+) -> dict:
+    """Delete all SAST findings for a product."""
+    team_val = helper.validate_input(team)
+    product_val = helper.validate_input(product)
+
+    if not is_authorized(
+        is_root=user_data.root, scope=user_data.scope, teams=[team_val], op=ADMIN
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not team_val or not product_val:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+        )
+
+    res = None
+    try:
+        res = await c.delete_vulnerabilities_sast_by_product(
+            product=product_val, team=team_val
+        )
+    except Exception as e:
+        logger.error(f"Error deleting SAST findings: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
+
+
+@router.get("/sast/stats/{team}")
+async def sast_stats(
+    team: str,
+    user_data: mod_v1.JwtData = Depends(a.validate_access_token),
+) -> dict:
+    """Get SAST finding statistics for a team."""
+    team_val = helper.validate_input(team)
+
+    if not is_authorized(
+        is_root=user_data.root, scope=user_data.scope, teams=[team_val], op=READ_ONLY
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not team_val:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+        )
+
+    res = None
+    try:
+        res = await c.get_sast_stats_by_team(team=team_val)
+    except Exception as e:
+        logger.error(f"Error getting SAST stats: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
     return res
 
@@ -982,11 +1165,10 @@ async def list_api_tokens(
             q = await c.list_api_tokens(user_email=user_val)
 
         if not q or not q["status"]:
-            raise HTTPException(status_code=500, detail=helper.errors["500"])
+            logger.debug(f"No tokens found for user {user_val}")
+            return {"status": False, "result": []}
 
         tokens = q["result"]
-        for token in tokens:
-            token["token"] = None
 
         res = {"status": True, "result": tokens}
     except Exception as e:
