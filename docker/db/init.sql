@@ -234,6 +234,47 @@ CREATE INDEX idx_vuln_sca_severity ON vulnerabilities_sca(severity_level);
 CREATE INDEX idx_vuln_sca_vuln_id ON vulnerabilities_sca(vuln_id);
 CREATE INDEX idx_vuln_sca_image ON vulnerabilities_sca(image_name, image_version);
 
+-- Standalone SAST vulnerability storage (Semgrep findings)
+-- Code-level issues linked to products/teams (no image association)
+CREATE TABLE vulnerabilities_sast (
+    scanner TEXT NOT NULL,
+    rule_id TEXT NOT NULL,
+    product TEXT NOT NULL,
+    team TEXT NOT NULL REFERENCES teams(name) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    start_line INTEGER NOT NULL,
+    start_col INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    end_col INTEGER NOT NULL,
+    message TEXT,
+    severity TEXT NOT NULL,
+    confidence TEXT,
+    code_snippet TEXT,
+    suggested_fix TEXT,
+    fingerprint TEXT,
+    cwes JSONB DEFAULT '[]'::jsonb,
+    owasp JSONB DEFAULT '[]'::jsonb,
+    refs JSONB DEFAULT '[]'::jsonb,
+    category TEXT,
+    subcategory JSONB DEFAULT '[]'::jsonb,
+    technology JSONB DEFAULT '[]'::jsonb,
+    vulnerability_class JSONB DEFAULT '[]'::jsonb,
+    impact TEXT,
+    likelihood TEXT,
+    engine_kind TEXT,
+    validation_state TEXT,
+    first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (scanner, rule_id, product, team, file_path, start_line, start_col)
+);
+
+CREATE INDEX idx_vuln_sast_team ON vulnerabilities_sast(team);
+CREATE INDEX idx_vuln_sast_product ON vulnerabilities_sast(product);
+CREATE INDEX idx_vuln_sast_severity ON vulnerabilities_sast(severity);
+CREATE INDEX idx_vuln_sast_rule_id ON vulnerabilities_sast(rule_id);
+CREATE INDEX idx_vuln_sast_file_path ON vulnerabilities_sast(file_path);
+CREATE INDEX idx_vuln_sast_category ON vulnerabilities_sast(category);
+
 CREATE TABLE api_tokens (
     id SERIAL PRIMARY KEY,
     token_hash TEXT UNIQUE NOT NULL,
