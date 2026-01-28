@@ -22,6 +22,129 @@
         return;
     }
 
+    /* ---- SCA column definitions ---- */
+
+    const COLUMN_STORAGE_KEY = 'vma.image.columns';
+
+    function truncate(str, max) {
+        if (!str) return '';
+        return str.length > max ? str.slice(0, max) + '…' : str;
+    }
+
+    function formatFixVersions(item) {
+        const fix = item?.fix;
+        if (!fix) return '—';
+        const versions = Array.isArray(fix.versions) ? fix.versions : [];
+        return versions.length ? versions.join(', ') : '—';
+    }
+
+    function formatEpss(item) {
+        const epss = Array.isArray(item?.epss) ? item.epss : [];
+        if (!epss.length) return '—';
+        const e = epss[0];
+        const score = e?.epss ?? e?.score;
+        if (score === undefined || score === null) return '—';
+        const pct = (score * 100).toFixed(2) + '%';
+        const percentile = e?.percentile;
+        if (percentile !== undefined && percentile !== null) {
+            return `${pct} (P${(percentile * 100).toFixed(1)})`;
+        }
+        return pct;
+    }
+
+    function formatCvssAggregated(item) {
+        const cvss = Array.isArray(item?.cvss) ? item.cvss : [];
+        if (!cvss.length) return '—';
+        const byVersion = {};
+        for (const entry of cvss) {
+            const ver = entry.version || '?';
+            if (!byVersion[ver] || entry.type === 'Primary') {
+                byVersion[ver] = entry;
+            }
+        }
+        return Object.entries(byVersion)
+            .map(([ver, e]) => {
+                const score = e.metrics?.baseScore ?? e.score ?? '?';
+                return `v${ver}: ${score}`;
+            })
+            .join(' | ');
+    }
+
+    function formatCwes(item) {
+        const cwes = Array.isArray(item?.cwes) ? item.cwes : [];
+        if (!cwes.length) return '—';
+        const ids = [...new Set(cwes.map(c => {
+            if (typeof c === 'string') return c;
+            return c.cwe || c.id || c.cweId || '';
+        }).filter(Boolean))];
+        return ids.join(', ');
+    }
+
+    function formatUrls(item) {
+        const urls = Array.isArray(item?.urls) ? item.urls : [];
+        if (!urls.length) return '—';
+        return `${urls.length} ref${urls.length === 1 ? '' : 's'}`;
+    }
+
+    function formatRelated(item) {
+        const rel = Array.isArray(item?.related_vulnerabilities) ? item.related_vulnerabilities : [];
+        if (!rel.length) return '—';
+        return rel.map(r => (typeof r === 'string' ? r : r.id || '')).filter(Boolean).join(', ');
+    }
+
+    const SCA_COLUMNS = [
+        { key: 'vuln_id',    header: 'CVE',          visible: true,  extract: item => item?.vuln_id || '' },
+        { key: 'severity',   header: 'Severity',     visible: true,  extract: item => item?.severity_level || '' },
+        { key: 'component',  header: 'Component',    visible: true,  extract: item => item?.affected_component || '' },
+        { key: 'version',    header: 'Version',      visible: true,  extract: item => item?.affected_version || '' },
+        { key: 'type',       header: 'Type',         visible: true,  extract: item => item?.affected_component_type || '' },
+        { key: 'fix',        header: 'Fix Versions',  visible: true,  extract: formatFixVersions },
+        { key: 'cvss',       header: 'CVSS',         visible: true,  extract: formatCvssAggregated },
+        { key: 'epss',       header: 'EPSS',         visible: false, extract: formatEpss },
+        { key: 'path',       header: 'Path',         visible: false, extract: item => item?.affected_path || '' },
+        { key: 'description',header: 'Description',  visible: false, extract: item => truncate(item?.description, 80) },
+        { key: 'source',     header: 'Source',       visible: false, extract: item => item?.source || '' },
+        { key: 'scanner',    header: 'Scanner',      visible: false, extract: item => item?.scanner || '' },
+        { key: 'cwes',       header: 'CWEs',         visible: false, extract: formatCwes },
+        { key: 'urls',       header: 'References',   visible: false, extract: formatUrls },
+        { key: 'related',    header: 'Related',      visible: false, extract: formatRelated }
+    ];
+
+    function loadColumnVisibility() {
+        try {
+            const raw = localStorage.getItem(COLUMN_STORAGE_KEY);
+            if (!raw) return null;
+            return JSON.parse(raw);
+        } catch { return null; }
+    }
+
+    function saveColumnVisibility(visibility) {
+        try {
+            localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(visibility));
+        } catch { /* ignore quota errors */ }
+    }
+
+    function getDefaultVisibility() {
+        const vis = {};
+        SCA_COLUMNS.forEach(col => { vis[col.key] = col.visible; });
+        return vis;
+    }
+
+    function getVisibleColumns(state) {
+        const vis = state.columnVisibility || getDefaultVisibility();
+        return SCA_COLUMNS.filter(col => vis[col.key]);
+    }
+
+    function getSeverityBadgeClass(level) {
+        if (!level) return 'severity-none';
+        const lower = String(level).toLowerCase();
+        if (lower === 'critical') return 'severity-critical';
+        if (lower === 'high') return 'severity-high';
+        if (lower === 'medium') return 'severity-medium';
+        if (lower === 'low') return 'severity-low';
+        return 'severity-none';
+    }
+
 
     function parseImageRecord(image) {
         if (!image) {
@@ -527,7 +650,13 @@
             presenceCell.innerHTML = `<span class="${badgeClass}">${label}</span>`;
             row.appendChild(presenceCell);
 
-            row.appendChild(createElementWithAttrs('td', item?.base_severity || '—'));
+            const severityCell = document.createElement('td');
+            const severityLevel = item?.base_severity || '';
+            const severityBadge = document.createElement('span');
+            severityBadge.className = `severity-badge ${getSeverityBadgeClass(severityLevel)}`;
+            severityBadge.textContent = severityLevel || '—';
+            severityCell.appendChild(severityBadge);
+            row.appendChild(severityCell);
             const score = item?.base_score;
             const cvssVersion = item?.cvss_version ? `v${item.cvss_version}` : '';
             const scoreText = score === undefined || score === null ? '—' : String(score);
@@ -937,6 +1066,12 @@
                         <i class="fas fa-arrow-left"></i>
                         Go back
                     </button>
+                    <div class="column-toggle-wrapper">
+                        <button type="button" class="btn secondary" data-column-toggle-btn>
+                            <i class="fas fa-table-columns"></i> Columns
+                        </button>
+                        <div class="column-toggle-dropdown" data-column-toggle-dropdown></div>
+                    </div>
                     <label class="sr-only" for="image-detail-search">Search vulnerabilities</label>
                     <input
                         type="search"
@@ -949,21 +1084,9 @@
             </div>
             <div class="inline-message" data-image-detail-feedback hidden></div>
             <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>CVE</th>
-                        <th>Component</th>
-                        <th>Type</th>
-                        <th>Fix Versions</th>
-                        <th>Detected Version</th>
-                        <th>Path</th>
-                        <th>First Seen</th>
-                        <th>Last Seen</th>
-                        <th>CVSS</th>
-                    </tr>
-                </thead>
+                <thead data-image-detail-thead><tr></tr></thead>
                 <tbody data-image-detail-rows>
-                    <tr><td colspan="9" class="empty">Select an image to view vulnerabilities.</td></tr>
+                    <tr><td colspan="${getVisibleColumns({columnVisibility: getDefaultVisibility()}).length}" class="empty">Select an image to view vulnerabilities.</td></tr>
                 </tbody>
             </table>
         `;
@@ -999,6 +1122,10 @@
             detailMeta: detailCard.querySelector('[data-image-detail-meta]'),
             detailSearchInput: detailCard.querySelector('[data-image-detail-search]'),
             detailBackButton: detailCard.querySelector('[data-image-back]'),
+            detailThead: detailCard.querySelector('[data-image-detail-thead]'),
+            columnToggleBtn: detailCard.querySelector('[data-column-toggle-btn]'),
+            columnToggleDropdown: detailCard.querySelector('[data-column-toggle-dropdown]'),
+            columnVisibility: loadColumnVisibility() || getDefaultVisibility(),
             deleteForm: deleteCard.querySelector('[data-image-delete-form]'),
             deleteFeedback: deleteCard.querySelector('[data-image-delete-feedback]'),
             deleteProductSelect: deleteCard.querySelector('#image-delete-product'),
@@ -1460,43 +1587,135 @@
         });
     }
 
+    function renderColumnToggleDropdown(state) {
+        const { columnToggleDropdown, columnVisibility } = state;
+        if (!columnToggleDropdown) return;
+        columnToggleDropdown.innerHTML = '';
+        SCA_COLUMNS.forEach(col => {
+            const item = document.createElement('div');
+            item.className = 'column-toggle-item';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = !!columnVisibility[col.key];
+            cb.id = `col-toggle-${col.key}`;
+            const lbl = document.createElement('label');
+            lbl.textContent = col.header;
+            lbl.setAttribute('for', cb.id);
+            item.appendChild(cb);
+            item.appendChild(lbl);
+            cb.addEventListener('change', () => {
+                state.columnVisibility[col.key] = cb.checked;
+                saveColumnVisibility(state.columnVisibility);
+                renderDetailTableHeader(state);
+                applyDetailSearch(state);
+            });
+            columnToggleDropdown.appendChild(item);
+        });
+    }
+
+    function renderDetailTableHeader(state) {
+        const { detailThead } = state;
+        if (!detailThead) return;
+        const tr = detailThead.querySelector('tr') || document.createElement('tr');
+        tr.innerHTML = '';
+        getVisibleColumns(state).forEach(col => {
+            const th = document.createElement('th');
+            th.textContent = col.header;
+            tr.appendChild(th);
+        });
+        if (!tr.parentNode) detailThead.appendChild(tr);
+    }
+
+    function setupColumnToggle(state) {
+        const { columnToggleBtn, columnToggleDropdown } = state;
+        if (!columnToggleBtn || !columnToggleDropdown) return;
+
+        columnToggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isOpen = columnToggleDropdown.classList.contains('open');
+            columnToggleDropdown.classList.toggle('open', !isOpen);
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!columnToggleDropdown.contains(e.target) && e.target !== columnToggleBtn) {
+                columnToggleDropdown.classList.remove('open');
+            }
+        });
+
+        renderColumnToggleDropdown(state);
+    }
+
     function renderVulnerabilityRows(state, items) {
         const { detailRows } = state;
         if (!detailRows) {
             return;
         }
+        const visCols = getVisibleColumns(state);
 
         if (!Array.isArray(items) || !items.length) {
-            detailRows.innerHTML = '<tr><td colspan="9" class="empty">No vulnerabilities found for this image.</td></tr>';
+            detailRows.innerHTML = `<tr><td colspan="${visCols.length}" class="empty">No vulnerabilities found for this image.</td></tr>`;
             return;
         }
 
         detailRows.innerHTML = '';
         items.forEach(item => {
             const row = document.createElement('tr');
-            const cvssInfo = item?.cvss || {};
-            const cvssScore = cvssInfo.score ?? '—';
-            const severity = cvssInfo.severity ?? '—';
-            const cvssVersion = cvssInfo.version ? `v${cvssInfo.version}` : '';
-
-            row.appendChild(createElementWithAttrs('td', item.cve || '—'));
-            row.appendChild(createElementWithAttrs('td', item.component || '—'));
-            row.appendChild(createElementWithAttrs('td', item.component_type || '—'));
-            row.appendChild(createElementWithAttrs('td', item.fix_versions || '—'));
-            row.appendChild(createElementWithAttrs('td', item.component_version || '—'));
-            row.appendChild(createElementWithAttrs('td', item.component_path || '—'));
-            row.appendChild(createElementWithAttrs('td', item.first_seen || '—'));
-            row.appendChild(createElementWithAttrs('td', item.last_seen || '—'));
-
-            const cvssCell = document.createElement('td');
-            cvssCell.className = 'cvss-cell';
-            cvssCell.innerHTML = `
-                <span class="cvss-chip">${cvssScore}</span>
-                <span class="cvss-chip">${severity}</span>
-                <span class="cvss-chip cvss-chip--muted">${cvssVersion}</span>
-            `;
-            row.appendChild(cvssCell);
-
+            visCols.forEach(col => {
+                if (col.key === 'cvss') {
+                    const cvssArr = Array.isArray(item?.cvss) ? item.cvss : [];
+                    const td = document.createElement('td');
+                    td.className = 'cvss-cell';
+                    if (cvssArr.length) {
+                        const byVersion = {};
+                        for (const entry of cvssArr) {
+                            const ver = entry.version || '?';
+                            if (!byVersion[ver] || entry.type === 'Primary') {
+                                byVersion[ver] = entry;
+                            }
+                        }
+                        const chips = Object.entries(byVersion).map(([ver, e]) => {
+                            const score = e.metrics?.baseScore ?? e.score ?? '—';
+                            return `<span class="cvss-chip" title="${e.source || ''} (${e.type || ''})"><span class="cvss-chip--muted">v${ver}</span> ${score}</span>`;
+                        });
+                        td.innerHTML = `<div class="cvss-stack">${chips.join('')}</div>`;
+                    } else {
+                        td.textContent = '—';
+                    }
+                    row.appendChild(td);
+                } else if (col.key === 'epss') {
+                    const td = document.createElement('td');
+                    const epssArr = Array.isArray(item?.epss) ? item.epss : [];
+                    if (epssArr.length) {
+                        const e = epssArr[0];
+                        const score = e?.epss ?? e?.score;
+                        if (score !== undefined && score !== null) {
+                            const pct = (score * 100).toFixed(2) + '%';
+                            const percentile = e?.percentile;
+                            if (percentile !== undefined && percentile !== null) {
+                                td.innerHTML = `<span class="epss-score">${pct}</span> <span class="epss-percentile" title="Percentile">P${(percentile * 100).toFixed(1)}</span>`;
+                            } else {
+                                td.textContent = pct;
+                            }
+                        } else {
+                            td.textContent = '—';
+                        }
+                    } else {
+                        td.textContent = '—';
+                    }
+                    row.appendChild(td);
+                } else if (col.key === 'severity') {
+                    const td = document.createElement('td');
+                    const level = item?.severity_level || '';
+                    const badge = document.createElement('span');
+                    badge.className = `severity-badge ${getSeverityBadgeClass(level)}`;
+                    badge.textContent = level || '—';
+                    td.appendChild(badge);
+                    row.appendChild(td);
+                } else {
+                    const text = col.extract(item);
+                    row.appendChild(createElementWithAttrs('td', text || '—'));
+                }
+            });
             detailRows.appendChild(row);
         });
     }
@@ -1551,7 +1770,8 @@
             compareCard.hidden = false;
         }
         if (detailRows) {
-            detailRows.innerHTML = '<tr><td colspan="9" class="empty">Select an image to view vulnerabilities.</td></tr>';
+            const colCount = getVisibleColumns(state).length;
+            detailRows.innerHTML = `<tr><td colspan="${colCount}" class="empty">Select an image to view vulnerabilities.</td></tr>`;
         }
         if (detailFeedback) {
             detailFeedback.hidden = true;
@@ -1571,8 +1791,9 @@
             detailFeedback.hidden = true;
             detailFeedback.textContent = '';
         }
+        const colCount = getVisibleColumns(state).length;
         if (state.detailRows) {
-            state.detailRows.innerHTML = '<tr><td colspan="9" class="empty">Loading vulnerabilities…</td></tr>';
+            state.detailRows.innerHTML = `<tr><td colspan="${colCount}" class="empty">Loading vulnerabilities…</td></tr>`;
         }
         if (detailSearchInput) {
             detailSearchInput.value = '';
@@ -1592,10 +1813,11 @@
         imageMeta.team = team;
 
         try {
-            const endpoint = `/image/${encodeURIComponent(team)}/${encodeURIComponent(imageMeta.product)}/${encodeURIComponent(imageMeta.name)}/${encodeURIComponent(imageMeta.version)}/vuln`;
+            const endpoint = `/image/${encodeURIComponent(team)}/${encodeURIComponent(imageMeta.product)}/${encodeURIComponent(imageMeta.name)}/${encodeURIComponent(imageMeta.version)}/vuln-sca`;
             const payload = await fetchJSON(apiUrl(endpoint));
             const items = payload && Array.isArray(payload.result) ? payload.result : [];
             state.currentVulns = items;
+            renderDetailTableHeader(state);
             applyDetailSearch(state);
         } catch (error) {
             state.currentVulns = [];
@@ -1622,26 +1844,19 @@
             return;
         }
 
+        const visCols = getVisibleColumns(state);
         const filtered = source.filter(item => {
-            const fields = [
-                item?.cve,
-                item?.component,
-                item?.component_type,
-                item?.fix_versions,
-                item?.component_version,
-                item?.component_path,
-                item?.first_seen,
-                item?.last_seen,
-                item?.cvss?.severity,
-                item?.cvss?.score,
-                item?.cvss?.version
-            ];
-
-            return fields.some(value => {
-                if (value === undefined || value === null) {
-                    return false;
+            return visCols.some(col => {
+                let text = '';
+                if (col.key === 'cvss') {
+                    const cvssArr = Array.isArray(item?.cvss) ? item.cvss : [];
+                    text = cvssArr.map(c => `${c.score ?? ''} ${c.severity ?? ''} ${c.version ? 'v' + c.version : ''}`).join(' ');
+                } else if (col.key === 'severity') {
+                    text = item?.severity_level || '';
+                } else {
+                    text = col.extract(item);
                 }
-                return String(value).toLowerCase().includes(term);
+                return text && String(text).toLowerCase().includes(term);
             });
         });
 
@@ -1837,6 +2052,8 @@
         setupDeleteToggle(state, helpers);
         setupCompareToggle(state, helpers);
         attachListInteractions(state, helpers);
+        setupColumnToggle(state);
+        renderDetailTableHeader(state);
 
         if (state.detailBackButton) {
             state.detailBackButton.addEventListener('click', () => {

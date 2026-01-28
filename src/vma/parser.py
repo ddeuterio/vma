@@ -185,3 +185,73 @@ async def xray_parse_report(metadata, path):
         else:
             logger.debug("xray_parse_report; no vulnerabilities parsed")
         return r_data
+
+
+def _parse_semgrep_cwes(raw_cwes: list) -> list:
+    """Parse CWE strings like 'CWE-89: SQL Injection' into structured dicts."""
+    parsed = []
+    for cwe in raw_cwes:
+        if isinstance(cwe, str) and ":" in cwe:
+            parts = cwe.split(":", 1)
+            parsed.append({"id": parts[0].strip(), "name": parts[1].strip()})
+        elif isinstance(cwe, str):
+            parsed.append({"id": cwe.strip(), "name": ""})
+        else:
+            parsed.append(cwe)
+    return parsed
+
+
+async def semgrep_parser(path: str) -> list:
+    """
+    Parse Semgrep JSON output into a list of finding dicts.
+
+    Args:
+        path: path to the Semgrep JSON report
+
+    Returns:
+        List of finding dicts ready for DB insertion
+    """
+    json_data = None
+    async with aiofiles.open(path, "r") as f:
+        content = await f.read()
+        json_data = json.loads(content)
+
+    ret = []
+    for result in json_data.get("results", []):
+        finding = {}
+        finding["rule_id"] = result.get("check_id", "")
+        finding["file_path"] = result.get("path", "")
+
+        start = result.get("start", {})
+        finding["start_line"] = start.get("line", 0)
+        finding["start_col"] = start.get("col", 0)
+
+        end = result.get("end", {})
+        finding["end_line"] = end.get("line", 0)
+        finding["end_col"] = end.get("col", 0)
+
+        extra = result.get("extra", {})
+        finding["message"] = extra.get("message", "")
+        finding["severity"] = extra.get("severity", "")
+        finding["code_snippet"] = extra.get("lines", "")
+        finding["suggested_fix"] = extra.get("fix", "")
+        finding["fingerprint"] = extra.get("fingerprint", "")
+        finding["validation_state"] = extra.get("validation_state", "")
+        finding["engine_kind"] = extra.get("engine_kind", "")
+
+        metadata = extra.get("metadata", {})
+        finding["confidence"] = metadata.get("confidence", "")
+        finding["category"] = metadata.get("category", "")
+        finding["impact"] = metadata.get("impact", "")
+        finding["likelihood"] = metadata.get("likelihood", "")
+        finding["cwes"] = _parse_semgrep_cwes(metadata.get("cwe", []))
+        finding["owasp"] = metadata.get("owasp", [])
+        finding["refs"] = metadata.get("references", [])
+        finding["subcategory"] = metadata.get("subcategory", [])
+        finding["technology"] = metadata.get("technology", [])
+        finding["vulnerability_class"] = metadata.get("vulnerability_class", [])
+
+        ret.append(finding)
+
+    logger.debug(f"A total of {len(ret)} SAST findings identified when parsing Semgrep report")
+    return ret

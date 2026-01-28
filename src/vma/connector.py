@@ -321,11 +321,13 @@ queries = {
     "compare_image_versions": """
         WITH image_a AS (
             SELECT DISTINCT
-                cve,
+                scanner,
+                source,
+                vuln_id,
                 affected_component_type,
                 affected_component,
                 affected_path
-            FROM image_vulnerabilities
+            FROM vulnerabilities_sca
             WHERE team = $1
             AND product = $2
             AND image_name = $3
@@ -333,52 +335,62 @@ queries = {
         ),
         image_b AS (
             SELECT DISTINCT
-                cve,
+                scanner,
+                source,
+                vuln_id,
                 affected_component_type,
                 affected_component,
                 affected_path
-            FROM image_vulnerabilities
+            FROM vulnerabilities_sca
             WHERE team = $1
             AND product = $2
             AND image_name = $3
-            AND image_version = $4
+            AND image_version = $5
         ),
         diff AS (
             SELECT
-                COALESCE(a.cve, b.cve) AS cve_id,
-                COALESCE(a.affected_component_type, b.affected_component_type) AS component_type,
-                COALESCE(a.affected_component, b.affected_component) AS component,
-                COALESCE(a.affected_path, b.affected_path) AS component_path,
+                COALESCE(a.vuln_id, b.vuln_id) AS vuln_id,
+                COALESCE(a.scanner, b.scanner) AS scanner,
+                COALESCE(a.source, b.source) AS source,
+                COALESCE(a.affected_component_type, b.affected_component_type) AS affected_component_type,
+                COALESCE(a.affected_component, b.affected_component) AS affected_component,
+                COALESCE(a.affected_path, b.affected_path) AS affected_path,
                 CASE
-                    WHEN a.cve IS NOT NULL AND b.cve IS NOT NULL THEN 'shared'
-                    WHEN a.cve IS NOT NULL THEN 'only_version_a'
+                    WHEN a.vuln_id IS NOT NULL AND b.vuln_id IS NOT NULL THEN 'shared'
+                    WHEN a.vuln_id IS NOT NULL THEN 'only_version_a'
                     ELSE 'only_version_b'
-                END AS comparison
+                END AS comparison,
+                CASE
+                    WHEN a.vuln_id IS NOT NULL THEN $4
+                    ELSE $5
+                END AS source_version
             FROM image_a a
-            FULL OUTER JOIN image_b b USING (cve, affected_component_type, affected_component)
-        ),
-        cvss AS (
-            SELECT
-                cve_id,
-                source,
-                cvss_version,
-                vector_string,
-                base_score,
-                base_severity
-            FROM cvss_metrics
+            FULL OUTER JOIN image_b b USING (vuln_id, scanner, source, affected_component_type, affected_component)
         )
         SELECT
-            d.cve_id,
-            d.component_type,
-            d.component,
-            d.component_path,
+            d.vuln_id,
+            v.severity_level,
             d.comparison,
-            m.base_score,
-            m.cvss_version,
-            m.base_severity
+            d.affected_component_type,
+            d.affected_component,
+            d.affected_path,
+            v.cvss,
+            v.epss,
+            v.urls,
+            v.cwes,
+            v.fix
         FROM diff d
-        LEFT JOIN cvss m ON m.cve_id = d.cve_id
-        ORDER BY d.cve_id, d.component, d.component_path;
+        JOIN vulnerabilities_sca v ON
+            v.vuln_id = d.vuln_id
+            AND v.scanner = d.scanner
+            AND v.source = d.source
+            AND v.affected_component_type = d.affected_component_type
+            AND v.affected_component = d.affected_component
+            AND v.team = $1
+            AND v.product = $2
+            AND v.image_name = $3
+            AND v.image_version = d.source_version
+        ORDER BY v.severity_level DESC, d.vuln_id;
     """,
     "get_users": """
         SELECT
@@ -767,6 +779,101 @@ queries = {
                cvss, epss, urls, cwes, fix, related_vulnerabilities
         FROM vulnerabilities_sca
         WHERE vuln_id = $1 AND team = $2;
+    """,
+    "insert_vulnerability_sast": """
+        INSERT INTO vulnerabilities_sast
+            (scanner, rule_id, product, team, file_path,
+             start_line, start_col, end_line, end_col,
+             message, severity, confidence, code_snippet, suggested_fix, fingerprint,
+             cwes, owasp, refs, category, subcategory, technology,
+             vulnerability_class, impact, likelihood, engine_kind, validation_state)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+        ON CONFLICT (scanner, rule_id, product, team, file_path, start_line, start_col)
+        DO UPDATE SET
+            end_line = EXCLUDED.end_line,
+            end_col = EXCLUDED.end_col,
+            message = EXCLUDED.message,
+            severity = EXCLUDED.severity,
+            confidence = EXCLUDED.confidence,
+            code_snippet = EXCLUDED.code_snippet,
+            suggested_fix = EXCLUDED.suggested_fix,
+            fingerprint = EXCLUDED.fingerprint,
+            cwes = EXCLUDED.cwes,
+            owasp = EXCLUDED.owasp,
+            refs = EXCLUDED.refs,
+            category = EXCLUDED.category,
+            subcategory = EXCLUDED.subcategory,
+            technology = EXCLUDED.technology,
+            vulnerability_class = EXCLUDED.vulnerability_class,
+            impact = EXCLUDED.impact,
+            likelihood = EXCLUDED.likelihood,
+            engine_kind = EXCLUDED.engine_kind,
+            validation_state = EXCLUDED.validation_state,
+            last_seen = now();
+    """,
+    "get_vulnerabilities_sast_by_product": """
+        SELECT scanner, rule_id, product, team, file_path,
+               start_line, start_col, end_line, end_col,
+               message, severity, confidence, code_snippet, suggested_fix, fingerprint,
+               cwes, owasp, refs, category, subcategory, technology,
+               vulnerability_class, impact, likelihood, engine_kind, validation_state,
+               first_seen, last_seen
+        FROM vulnerabilities_sast
+        WHERE product = $1 AND team = $2
+        ORDER BY
+            CASE severity
+                WHEN 'ERROR' THEN 1
+                WHEN 'WARNING' THEN 2
+                WHEN 'INFO' THEN 3
+                ELSE 4
+            END,
+            rule_id;
+    """,
+    "get_vulnerabilities_sast_by_team": """
+        SELECT scanner, rule_id, product, team, file_path,
+               start_line, start_col, end_line, end_col,
+               message, severity, confidence, code_snippet, suggested_fix, fingerprint,
+               cwes, owasp, refs, category, subcategory, technology,
+               vulnerability_class, impact, likelihood, engine_kind, validation_state,
+               first_seen, last_seen
+        FROM vulnerabilities_sast
+        WHERE team = $1
+        ORDER BY
+            CASE severity
+                WHEN 'ERROR' THEN 1
+                WHEN 'WARNING' THEN 2
+                WHEN 'INFO' THEN 3
+                ELSE 4
+            END,
+            product, rule_id;
+    """,
+    "get_vulnerability_sast_by_rule": """
+        SELECT scanner, rule_id, product, team, file_path,
+               start_line, start_col, end_line, end_col,
+               message, severity, confidence, code_snippet, suggested_fix, fingerprint,
+               cwes, owasp, refs, category, subcategory, technology,
+               vulnerability_class, impact, likelihood, engine_kind, validation_state,
+               first_seen, last_seen
+        FROM vulnerabilities_sast
+        WHERE rule_id = $1 AND team = $2
+        ORDER BY product, file_path, start_line;
+    """,
+    "delete_vulnerabilities_sast_by_product": """
+        DELETE FROM vulnerabilities_sast
+        WHERE product = $1 AND team = $2;
+    """,
+    "get_sast_stats_by_team": """
+        SELECT
+            product,
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE severity = 'ERROR') AS errors,
+            COUNT(*) FILTER (WHERE severity = 'WARNING') AS warnings,
+            COUNT(*) FILTER (WHERE severity = 'INFO') AS info
+        FROM vulnerabilities_sast
+        WHERE team = $1
+        GROUP BY product
+        ORDER BY product;
     """,
 }
 
@@ -1263,22 +1370,24 @@ async def compare_image_versions(
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
+            await conn.set_type_codec(
+                "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+            )
             q = await conn.fetch(
                 queries["compare_image_versions"],
                 team,
                 product,
                 image,
                 version_a,
-                product,
-                image,
                 version_b,
             )
 
         if not q:
             res["status"] = False
+            logger.debug("Couldn't get data")
         else:
             res["result"] = q
-        logger.debug("Data from the two versions gotten")
+            logger.debug("Data from the two versions gotten")
     except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
@@ -1916,7 +2025,7 @@ async def list_api_tokens(user_email: Optional[str] = None) -> dict:
             res["result"] = tokens
         else:
             res["status"] = True
-            res["result"] = "No tokens to display"
+            res["result"] = []
     except Exception as e:
         logger.error(f"Error getting API token: {e}")
         res["result"] = "Could not fetch tokens"
@@ -2087,6 +2196,9 @@ async def get_osv_by_id(osv_id: str) -> dict:
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
+            await conn.set_type_codec(
+                "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+            )
             q = await conn.fetchrow(queries["get_osv_by_id"], osv_id)
 
         if not q:
@@ -2134,6 +2246,9 @@ async def get_osv_by_ilike_id(osv_id: str) -> dict:
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
+            await conn.set_type_codec(
+                "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+            )
             rows = await conn.fetch(queries["get_osvs"], osv_id)
 
         if not rows:
@@ -2323,6 +2438,9 @@ async def get_vulnerabilities_sca_by_image(
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
+            await conn.set_type_codec(
+                "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+            )
             rows = await conn.fetch(
                 queries["get_vulnerabilities_sca_by_image"],
                 image_name,
@@ -2379,6 +2497,9 @@ async def get_vulnerability_sca_by_id(vuln_id: str, team: str) -> dict:
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
+            await conn.set_type_codec(
+                "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+            )
             rows = await conn.fetch(
                 queries["get_vulnerability_sca_by_id"],
                 vuln_id,
@@ -2418,5 +2539,281 @@ async def get_vulnerability_sca_by_id(vuln_id: str, team: str) -> dict:
         res = {"status": False, "result": str(e)}
     except Exception as e:
         logger.error(f"Error in get_vulnerability_sca_by_id: {e}")
+        res = {"status": False, "result": str(e)}
+    return res
+
+
+def _row_to_sast_dict(row) -> dict:
+    """Convert an asyncpg Row from vulnerabilities_sast to a dict."""
+    return {
+        "scanner": row[0],
+        "rule_id": row[1],
+        "product": row[2],
+        "team": row[3],
+        "file_path": row[4],
+        "start_line": row[5],
+        "start_col": row[6],
+        "end_line": row[7],
+        "end_col": row[8],
+        "message": row[9],
+        "severity": row[10],
+        "confidence": row[11],
+        "code_snippet": row[12],
+        "suggested_fix": row[13],
+        "fingerprint": row[14],
+        "cwes": row[15],
+        "owasp": row[16],
+        "refs": row[17],
+        "category": row[18],
+        "subcategory": row[19],
+        "technology": row[20],
+        "vulnerability_class": row[21],
+        "impact": row[22],
+        "likelihood": row[23],
+        "engine_kind": row[24],
+        "validation_state": row[25],
+        "first_seen": str(row[26]) if row[26] else None,
+        "last_seen": str(row[27]) if row[27] else None,
+    }
+
+
+async def insert_vulnerabilities_sast_batch(
+    findings: list[dict],
+    product: str,
+    team: str,
+    scanner: str,
+) -> dict:
+    """
+    Batch insert SAST findings.
+
+    Args:
+        findings: List of finding dicts from semgrep_parser
+        product: Product ID
+        team: Team name
+        scanner: Scanner name (e.g., 'semgrep')
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": f"Inserted {len(findings)} SAST findings"}
+    pool = await get_pool()
+    try:
+        values = []
+        for f in findings:
+            values.append(
+                (
+                    scanner,
+                    f["rule_id"],
+                    product,
+                    team,
+                    f["file_path"],
+                    f["start_line"],
+                    f["start_col"],
+                    f["end_line"],
+                    f["end_col"],
+                    f.get("message", ""),
+                    f["severity"],
+                    f.get("confidence", ""),
+                    f.get("code_snippet", ""),
+                    f.get("suggested_fix", ""),
+                    f.get("fingerprint", ""),
+                    json.dumps(f.get("cwes", [])),
+                    json.dumps(f.get("owasp", [])),
+                    json.dumps(f.get("refs", [])),
+                    f.get("category", ""),
+                    json.dumps(f.get("subcategory", [])),
+                    json.dumps(f.get("technology", [])),
+                    json.dumps(f.get("vulnerability_class", [])),
+                    f.get("impact", ""),
+                    f.get("likelihood", ""),
+                    f.get("engine_kind", ""),
+                    f.get("validation_state", ""),
+                )
+            )
+
+        async with pool.acquire() as conn:
+            await conn.executemany(queries["insert_vulnerability_sast"], values)
+
+        logger.debug(
+            f"Batch inserted {len(findings)} SAST findings for {product} in team {team}"
+        )
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error in insert_vulnerabilities_sast_batch: {e}")
+        res = {"status": False, "result": str(e)}
+    except Exception as e:
+        logger.error(f"Error in insert_vulnerabilities_sast_batch: {e}")
+        res = {"status": False, "result": str(e)}
+    return res
+
+
+async def get_vulnerabilities_sast_by_product(product: str, team: str) -> dict:
+    """
+    Get all SAST findings for a product.
+
+    Args:
+        product: Product ID
+        team: Team name
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": []}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            await conn.set_type_codec(
+                "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+            )
+            rows = await conn.fetch(
+                queries["get_vulnerabilities_sast_by_product"], product, team
+            )
+
+        if rows:
+            for row in rows:
+                res["result"].append(_row_to_sast_dict(row))
+        logger.debug(
+            f"Found {len(res['result'])} SAST findings for {product} in team {team}"
+        )
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error in get_vulnerabilities_sast_by_product: {e}")
+        res = {"status": False, "result": str(e)}
+    except Exception as e:
+        logger.error(f"Error in get_vulnerabilities_sast_by_product: {e}")
+        res = {"status": False, "result": str(e)}
+    return res
+
+
+async def get_vulnerabilities_sast_by_team(team: str) -> dict:
+    """
+    Get all SAST findings for a team across all products.
+
+    Args:
+        team: Team name
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": []}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            await conn.set_type_codec(
+                "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+            )
+            rows = await conn.fetch(queries["get_vulnerabilities_sast_by_team"], team)
+
+        if rows:
+            for row in rows:
+                res["result"].append(_row_to_sast_dict(row))
+        logger.debug(f"Found {len(res['result'])} SAST findings for team {team}")
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error in get_vulnerabilities_sast_by_team: {e}")
+        res = {"status": False, "result": str(e)}
+    except Exception as e:
+        logger.error(f"Error in get_vulnerabilities_sast_by_team: {e}")
+        res = {"status": False, "result": str(e)}
+    return res
+
+
+async def get_vulnerability_sast_by_rule(rule_id: str, team: str) -> dict:
+    """
+    Get SAST findings by rule ID within a team.
+
+    Args:
+        rule_id: Semgrep rule ID
+        team: Team name
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": []}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            await conn.set_type_codec(
+                "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+            )
+            rows = await conn.fetch(
+                queries["get_vulnerability_sast_by_rule"], rule_id, team
+            )
+
+        if rows:
+            for row in rows:
+                res["result"].append(_row_to_sast_dict(row))
+        logger.debug(
+            f"Found {len(res['result'])} SAST findings for rule {rule_id} in team {team}"
+        )
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error in get_vulnerability_sast_by_rule: {e}")
+        res = {"status": False, "result": str(e)}
+    except Exception as e:
+        logger.error(f"Error in get_vulnerability_sast_by_rule: {e}")
+        res = {"status": False, "result": str(e)}
+    return res
+
+
+async def delete_vulnerabilities_sast_by_product(product: str, team: str) -> dict:
+    """
+    Delete all SAST findings for a product.
+
+    Args:
+        product: Product ID
+        team: Team name
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": None}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                q = await conn.execute(
+                    queries["delete_vulnerabilities_sast_by_product"], product, team
+                )
+            res["result"] = {"deleted_rows": int(q.split()[-1])}
+            logger.debug(f"Deleted SAST findings for {product} in team {team}")
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error in delete_vulnerabilities_sast_by_product: {e}")
+        res = {"status": False, "result": str(e)}
+    except Exception as e:
+        logger.error(f"Error in delete_vulnerabilities_sast_by_product: {e}")
+        res = {"status": False, "result": str(e)}
+    return res
+
+
+async def get_sast_stats_by_team(team: str) -> dict:
+    """
+    Get SAST finding statistics by team, broken down by product and severity.
+
+    Args:
+        team: Team name
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": []}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(queries["get_sast_stats_by_team"], team)
+
+        if rows:
+            for row in rows:
+                res["result"].append(
+                    {
+                        "product": row[0],
+                        "total": row[1],
+                        "errors": row[2],
+                        "warnings": row[3],
+                        "info": row[4],
+                    }
+                )
+        logger.debug(f"Got SAST stats for team {team}: {len(res['result'])} products")
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error in get_sast_stats_by_team: {e}")
+        res = {"status": False, "result": str(e)}
+    except Exception as e:
+        logger.error(f"Error in get_sast_stats_by_team: {e}")
         res = {"status": False, "result": str(e)}
     return res

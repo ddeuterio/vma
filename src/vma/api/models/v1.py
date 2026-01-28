@@ -34,6 +34,21 @@ class ImportSca(BaseModel):
     vulnerabilities: list  # List of VulnerabilitySca dicts
 
 
+class ImageCompare(BaseModel):
+    team: str
+    product: str
+    image: str
+    v1: str
+    v2: str
+
+
+class ImportSast(BaseModel):
+    scanner: str
+    product: str
+    team: str
+    findings: list  # List of VulnerabilitySast dicts
+
+
 class Team(BaseModel):
     name: str
     description: str | None = None

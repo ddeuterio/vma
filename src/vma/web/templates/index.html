@@ -35,6 +35,12 @@
                 </a>
             </li>
             <li class="nav-item">
+                <a class="nav-link" href="/" data-route="code">
+                    <i class="fas fa-code"></i>
+                    <span>Code</span>
+                </a>
+            </li>
+            <li class="nav-item">
                 <a class="nav-link" href="/" data-route="cve">
                     <i class="fas fa-search"></i>
                     <span>CVE Search</span>
@@ -94,6 +100,7 @@
     <script defer src="{{ request.url_for('static', path='js/image.js') }}"></script>
     <script defer src="{{ request.url_for('static', path='js/product.js') }}"></script>
     <script defer src="{{ request.url_for('static', path='js/cve.js') }}"></script>
+    <script defer src="{{ request.url_for('static', path='js/code.js') }}"></script>
     <script defer src="{{ request.url_for('static', path='js/teams.js') }}"></script>
     <script defer src="{{ request.url_for('static', path='js/users.js') }}"></script>
 </body>

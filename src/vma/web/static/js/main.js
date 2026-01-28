@@ -4,7 +4,8 @@
         dashboard: '/',
         products: '/products',
         images: '/images',
-        cve: '/cve'
+        cve: '/cve',
+        code: '/code'
     };
     const authState = {
         accessToken: null,
