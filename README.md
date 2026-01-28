@@ -1,76 +1,195 @@
-# VMA
+# VMA - Vulnerability Management Application
 
-Your Vulnerability Management Application (+ your CVE database).
+A comprehensive vulnerability management platform for tracking CVEs across container images, with support for both SCA (Software Composition Analysis) and SAST (Static Application Security Testing) findings.
 
-## Installation
+## Features
 
-Clone
+### Vulnerability Data Sources
 
-Create an .env file with the following parameters and store it inside the docker/ directory
+- **NVD Integration** - Sync CVE data from NIST National Vulnerability Database
+- **OSV Integration** - Import vulnerabilities from the Open Source Vulnerabilities database
+- **Scanner Support** - Import results from Grype (SCA) and Semgrep (SAST)
+
+### Core Capabilities
+
+- **Product & Image Management** - Organize vulnerabilities by products and container image versions
+- **Image Version Comparison** - Compare vulnerabilities between different versions of the same image
+- **Team-Based Access Control** - Hierarchical permissions (READ_ONLY, WRITE, ADMIN) per team
+- **CVSS & EPSS Scoring** - View multiple CVSS versions and EPSS probability scores
+- **Rich Vulnerability Details** - CWEs, fix versions, references, and related vulnerabilities
+
+### Security
+
+- **JWT Authentication** - Short-lived access tokens with automatic refresh
+- **API Tokens** - Long-lived tokens for CI/CD and programmatic access
+- **Argon2 Password Hashing** - Industry-standard secure password storage
+- **Role-Based Authorization** - Fine-grained team and scope permissions
+
+## Quick Start
+
+### Prerequisites
+
+- Docker & Docker Compose
+- (Optional) NVD API key for faster CVE sync
+
+### Installation
+
+1. **Clone the repository**
+
+   ```bash
+   git clone https://github.com/yourusername/vma.git
+   cd vma
+   ```
+
+2. **Create environment file**
+
+   Create `.env` in the `docker/` directory:
+
+   ```bash
+   # Database
+   DB_HOST=db
+   DB_USER=vma
+   DB_PASS=your_secure_password
+   DB_NAME=vma
+   POSTGRES_USER=vma
+   POSTGRES_PASSWORD=your_secure_password
+   POSTGRES_DB=vma
+
+   # NVD API (optional but recommended)
+   NVD_API_KEY=your_nvd_api_key
+
+   # JWT Secrets (generate secure random strings)
+   SECRET_KEY_ACCESS=your_access_secret_key
+   SECRET_KEY_REFRESH=your_refresh_secret_key
+   TOKEN_ALG=HS256
+   ACCESS_TOKEN_EXP_TIME=15
+   REFRESH_TOKEN_EXP_TIME=2
+   ```
+
+3. **Build Docker images**
+
+   ```bash
+   docker build -t vma:latest -f Dockerfile.vma .
+   docker build -t web:latest -f Dockerfile.web .
+   ```
+
+4. **Start the stack**
+
+   ```bash
+   cd docker
+   docker-compose up -d
+   ```
+
+5. **Initialize the database**
+
+   ```bash
+   # Create admin user
+   docker exec -it vma-web vma login --init
+
+   # Initialize CVE database (takes several hours on first run)
+   docker run --rm --env-file .env vma cve --init
+   ```
+
+6. **Access the application**
+
+   Add to `/etc/hosts`:
+
+   ```
+   127.0.0.1 vma.local
+   ```
+
+   Navigate to: `https://vma.local:8443`
+
+   Default credentials: `admin@vma.com` / `changeme`
+
+## CLI Reference
+
+### CVE Database Management
 
 ```bash
-DB_HOST=
-DB_USER=
-DB_PASS=
-DB_NAME=
-NVD_API_KEY=
-POSTGRES_USER=
-POSTGRES_PASSWORD=
-POSTGRES_DB=
+# Initialize NVD database (full historical sync)
+vma cve --init
+
+# Update with recent CVE changes
+vma cve --update
 ```
 
-Create the docker images for the services described in the docker-compose file:
+### OSV Database Management
 
 ```bash
-docker build -t vma:latest -f Dockerfile.vma .
-docker build -t web:latest -f Dockerfile.web .
+# Download and process all OSV data
+vma osv --all
+
+# Process only recent updates
+vma osv --recent
 ```
 
-Add the following to your /etc/hosts:
-
-```
-vma.local 127.0.0.1
-```
-
-Modify the ./docker/docker-compose.yml file to your needs and run it
+### Import Scan Results
 
 ```bash
-cd docker
-docker-compose up -d
+# Import Grype SCA results
+vma import \
+  --type grype \
+  --file scan-results.json \
+  --product my-product \
+  --image my-app \
+  --version 1.0.0 \
+  --team engineering \
+  --host localhost \
+  --port 8000 \
+  --token your_api_token \
+  --secure \
+  --ignore-cert
 ```
 
-**NOTE:** this application is using self-signed certificates
+## Technology Stack
 
-Use your browser to get access VMA!
+| Component | Technology |
+|-----------|------------|
+| Backend | FastAPI, Python 3.10+ |
+| Database | PostgreSQL 13+ |
+| Authentication | JWT, Argon2 |
+| Frontend | Vanilla JavaScript, CSS |
+| Server | Gunicorn + Uvicorn |
+| Reverse Proxy | Nginx |
+| Container | Docker |
 
-```
-https://vma.local:8443
-```
+## Documentation
 
-If you want to periodically update the database, I recommend creating a cron job to launch the vma image.
+Comprehensive documentation is available in the `docs/` directory:
 
-In the following example, the job will run at 2 am every day:
+- [User Guide](docs/user-guide.md) - How to use VMA
+- [Architecture](docs/architecture.md) - System design and components
+- [API Reference](docs/api-reference.md) - Complete API documentation
+- [CLI Reference](docs/cli-reference.md) - Command-line usage
+- [Contributing](docs/contributing.md) - Development guidelines
 
-```bash
-0 2 * * * docker run --rm --env-file <put here the path to your env file> vma cve --update
-```
+## Tests
+
+Tests have been generated by Claude. Those tests are not meant to be as accurate as possible but a placeholder to have in for the CI in GH Actions.
 
 ## License
 
 This project is licensed under the **Apache License 2.0 with Commons Clause**.
 
-This means:
+**What this means:**
 
-* ✅ **Free to use** for personal, educational, and internal business purposes
-* ✅ **Free to modify** and create derivative works
-* ✅ **Free to distribute** with proper attribution
-* ❌ **Cannot be sold** as a product or service (see Commons Clause restriction)
+- **Free to use** for personal, educational, and internal business purposes
+- **Free to modify** and create derivative works
+- **Free to distribute** with proper attribution
+- **Cannot be sold** as a product or service (see Commons Clause restriction)
 
 **Commercial Use Restriction:**
+You cannot provide VMA to third parties as a commercial offering (SaaS, hosting, consulting) where the value derives substantially from VMA's functionality.
 
-You cannot provide VMA to third parties as a commercial offering (SaaS, hosting, consulting)
-where the value derives substantially from VMA's functionality.
+For commercial licensing inquiries: <daniel.garcia.anes@gmail.com>
 
-For commercial licensing inquiries, please contact: daniel.garcia.anes@gmail.com
+See [LICENSE.txt](LICENSE.txt) for full terms and conditions.
 
-See the LICENSE.txt file for full terms and conditions.
+## Contributing
+
+Contributions are welcome! Please read the [contributing guidelines](docs/contributing.md) before submitting pull requests.
+
+## Author
+
+**Daniel Garcia** - <daniel.garcia.anes@gmail.com>
