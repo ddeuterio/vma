@@ -143,8 +143,7 @@
     async function loadProducts(state) {
         try {
             const res = await fetchJSON(apiUrl('/products'));
-            const norm = normalizeApiResponse(res);
-            state.data.products = Array.isArray(norm.result) ? norm.result : [];
+            state.data.products = normalizeApiResponse(res);
         } catch (e) {
             console.error('Failed to load products:', e);
             state.data.products = [];
@@ -160,8 +159,7 @@
         try {
             const url = apiUrl(`/sast/${encodeURIComponent(state.currentTeam)}/${encodeURIComponent(state.currentProduct)}`);
             const res = await fetchJSON(url);
-            const norm = normalizeApiResponse(res);
-            state.data.findings = Array.isArray(norm.result) ? norm.result : [];
+            state.data.findings = normalizeApiResponse(res);
         } catch (e) {
             console.error('Failed to load SAST findings:', e);
             state.data.findings = [];

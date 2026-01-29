@@ -107,40 +107,33 @@ def normalize_comparison(comp: list) -> dict:
     for row in comp:
         if not row:
             continue
-
-        if len(row) >= 8:
-            (
-                cve_id,
-                component_type,
-                component,
-                component_path,
-                comparison,
-                base_score,
-                cvss_version,
-                base_severity,
-            ) = row[:8]
-        else:
-            (
-                cve_id,
-                component_type,
-                component,
-                comparison,
-                base_score,
-                cvss_version,
-                base_severity,
-            ) = row[:7]
-            component_path = None
+        (
+            vuln_id,
+            severity_level,
+            comparison,
+            affected_component_type,
+            affected_component,
+            affected_path,
+            cvss,
+            epss,
+            urls,
+            cwes,
+            fix,
+        ) = row[:11]
 
         ret.append(
             {
-                "cve_id": cve_id,
-                "component_type": component_type,
-                "component": component,
-                "component_path": component_path,
+                "vuln_id": vuln_id,
+                "severity_level": severity_level,
                 "comparison": comparison,
-                "base_score": base_score,
-                "cvss_version": cvss_version,
-                "base_severity": base_severity,
+                "affected_component_type": affected_component_type,
+                "affected_component": affected_component,
+                "affected_path": affected_path,
+                "cvss": cvss,
+                "epss": epss,
+                "urls": urls,
+                "cwes": cwes,
+                "fix": fix,
             }
         )
 

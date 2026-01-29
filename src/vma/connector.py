@@ -1219,7 +1219,7 @@ async def get_images(
         if not q:
             logger.debug("No images were found")
         else:
-            logger.debug("A total of {len(q)} images were found")
+            logger.debug(f"A total of {len(q)} images were found")
             for im in q:
                 res["result"].append(
                     {

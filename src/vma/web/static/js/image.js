@@ -1,879 +1,1126 @@
 (function () {
-    const utils = window.vmaUtils || {};
-    const router = window.vmaRouter || {};
-    const auth = window.vmaAuth || {};
+  const utils = window.vmaUtils || {};
+  const router = window.vmaRouter || {};
+  const auth = window.vmaAuth || {};
 
-    const {
-        createElementWithAttrs,
-        clearElement,
-        fetchJSON,
-        apiUrl,
-        setPageTitle,
-        createMessageHelper,
-        normalizeApiResponse,
-        createFormToggle,
-        selectHelpers
-    } = utils;
+  const {
+    createElementWithAttrs,
+    clearElement,
+    fetchJSON,
+    apiUrl,
+    setPageTitle,
+    createMessageHelper,
+    normalizeApiResponse,
+    createFormToggle,
+    selectHelpers
+  } = utils;
 
-    const { registerRoute, setActiveRoute } = router;
+  const { registerRoute, setActiveRoute } = router;
 
-    if (!createElementWithAttrs || !clearElement || !fetchJSON || !apiUrl || !registerRoute) {
-        console.warn('Images initialisation skipped: utilities not available.');
+  if (!createElementWithAttrs || !clearElement || !fetchJSON || !apiUrl || !registerRoute) {
+    console.warn('Images initialisation skipped: utilities not available.');
+    return;
+  }
+
+  /* ---- SCA column definitions ---- */
+
+  const COLUMN_STORAGE_KEY = 'vma.image.columns';
+
+  /* ---- Sorting utilities ---- */
+
+  const SORT_STORAGE_KEY_PREFIX = 'vma.image.sort';
+
+  function loadSortState(tableKey) {
+    try {
+      const raw = localStorage.getItem(`${SORT_STORAGE_KEY_PREFIX}.${tableKey}`);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch { return null; }
+  }
+
+  function saveSortState(tableKey, sortState) {
+    try {
+      localStorage.setItem(`${SORT_STORAGE_KEY_PREFIX}.${tableKey}`, JSON.stringify(sortState));
+    } catch { /* ignore */ }
+  }
+
+  function getSortValue(item, key, columns) {
+    if (!item) return '';
+
+    // For dynamic columns, use the extract function
+    const col = columns?.find(c => c.key === key);
+    if (col && col.extract) {
+      const val = col.extract(item);
+      return val ?? '';
+    }
+
+    // Direct property access for simple tables
+    return item[key] ?? '';
+  }
+
+  function compareValues(a, b, direction) {
+    // Handle null/undefined
+    if (a == null && b == null) return 0;
+    if (a == null) return direction === 'asc' ? -1 : 1;
+    if (b == null) return direction === 'asc' ? 1 : -1;
+
+    // Try numeric comparison first
+    const numA = parseFloat(a);
+    const numB = parseFloat(b);
+    if (!isNaN(numA) && !isNaN(numB)) {
+      return direction === 'asc' ? numA - numB : numB - numA;
+    }
+
+    // String comparison
+    const strA = String(a).toLowerCase();
+    const strB = String(b).toLowerCase();
+    const result = strA.localeCompare(strB, undefined, { numeric: true, sensitivity: 'base' });
+    return direction === 'asc' ? result : -result;
+  }
+
+  function sortItems(items, sortKey, direction, columns) {
+    if (!sortKey || !Array.isArray(items)) return items;
+    return [...items].sort((a, b) => {
+      const valA = getSortValue(a, sortKey, columns);
+      const valB = getSortValue(b, sortKey, columns);
+      return compareValues(valA, valB, direction);
+    });
+  }
+
+  function createSortableHeader(text, key, currentSort, onClick) {
+    const th = document.createElement('th');
+    th.className = 'sortable-header';
+    th.setAttribute('data-sort-key', key);
+    th.setAttribute('role', 'columnheader');
+    th.setAttribute('aria-sort', currentSort?.key === key
+      ? (currentSort.direction === 'asc' ? 'ascending' : 'descending')
+      : 'none');
+
+    const wrapper = document.createElement('button');
+    wrapper.type = 'button';
+    wrapper.className = 'sort-header-btn';
+
+    const label = document.createElement('span');
+    label.textContent = text;
+    wrapper.appendChild(label);
+
+    const indicator = document.createElement('span');
+    indicator.className = 'sort-indicator';
+    if (currentSort?.key === key) {
+      indicator.classList.add('sort-indicator--active');
+      indicator.innerHTML = currentSort.direction === 'asc'
+        ? '<i class="fas fa-sort-up"></i>'
+        : '<i class="fas fa-sort-down"></i>';
+    } else {
+      indicator.innerHTML = '<i class="fas fa-sort"></i>';
+    }
+    wrapper.appendChild(indicator);
+
+    wrapper.addEventListener('click', () => onClick(key));
+    th.appendChild(wrapper);
+    return th;
+  }
+
+  function toggleSortDirection(currentSort, key) {
+    if (currentSort?.key === key) {
+      return { key, direction: currentSort.direction === 'asc' ? 'desc' : 'asc' };
+    }
+    return { key, direction: 'asc' };
+  }
+
+  /* ---- Image List columns ---- */
+  const LIST_COLUMNS = [
+    { key: 'name', header: 'Name', sortable: true },
+    { key: 'version', header: 'Version', sortable: true },
+    { key: 'product', header: 'Product', sortable: true },
+    { key: 'actions', header: '', sortable: false }
+  ];
+
+  function truncate(str, max) {
+    if (!str) return '';
+    return str.length > max ? str.slice(0, max) + '…' : str;
+  }
+
+  function formatFixVersions(item) {
+    const fix = item?.fix;
+    if (!fix) return '—';
+    const versions = Array.isArray(fix.versions) ? fix.versions : [];
+    return versions.length ? versions.join(', ') : '—';
+  }
+
+  function formatEpss(item) {
+    const epss = Array.isArray(item?.epss) ? item.epss : [];
+    if (!epss.length) return '—';
+    const e = epss[0];
+    const score = e?.epss ?? e?.score;
+    if (score === undefined || score === null) return '—';
+    const pct = (score * 100).toFixed(2) + '%';
+    const percentile = e?.percentile;
+    if (percentile !== undefined && percentile !== null) {
+      return `${pct} (P${(percentile * 100).toFixed(1)})`;
+    }
+    return pct;
+  }
+
+  function formatCvssAggregated(item) {
+    const cvss = Array.isArray(item?.cvss) ? item.cvss : [];
+    if (!cvss.length) return '—';
+    const byVersion = {};
+    for (const entry of cvss) {
+      const ver = entry.version || '?';
+      if (!byVersion[ver] || entry.type === 'Primary') {
+        byVersion[ver] = entry;
+      }
+    }
+    return Object.entries(byVersion)
+      .map(([ver, e]) => {
+        const score = e.metrics?.baseScore ?? e.score ?? '?';
+        return `v${ver}: ${score}`;
+      })
+      .join(' | ');
+  }
+
+  function formatCwes(item) {
+    const cwes = Array.isArray(item?.cwes) ? item.cwes : [];
+    if (!cwes.length) return '—';
+    const ids = [...new Set(cwes.map(c => {
+      if (typeof c === 'string') return c;
+      return c.cwe || c.id || c.cweId || '';
+    }).filter(Boolean))];
+    return ids.join(', ');
+  }
+
+  function formatUrls(item) {
+    const urls = Array.isArray(item?.urls) ? item.urls : [];
+    if (!urls.length) return '—';
+    return `${urls.length} ref${urls.length === 1 ? '' : 's'}`;
+  }
+
+  function formatRelated(item) {
+    const rel = Array.isArray(item?.related_vulnerabilities) ? item.related_vulnerabilities : [];
+    if (!rel.length) return '—';
+    return rel.map(r => (typeof r === 'string' ? r : r.id || '')).filter(Boolean).join(', ');
+  }
+
+  const SCA_COLUMNS = [
+    { key: 'vuln_id', header: 'CVE', visible: true, extract: item => item?.vuln_id || '' },
+    { key: 'severity', header: 'Severity', visible: true, extract: item => item?.severity_level || '' },
+    { key: 'component', header: 'Component', visible: true, extract: item => item?.affected_component || '' },
+    { key: 'version', header: 'Version', visible: true, extract: item => item?.affected_version || '' },
+    { key: 'type', header: 'Type', visible: true, extract: item => item?.affected_component_type || '' },
+    { key: 'fix', header: 'Fix Versions', visible: true, extract: formatFixVersions },
+    { key: 'cvss', header: 'CVSS', visible: true, extract: formatCvssAggregated },
+    { key: 'epss', header: 'EPSS', visible: false, extract: formatEpss },
+    { key: 'path', header: 'Path', visible: false, extract: item => item?.affected_path || '' },
+    { key: 'description', header: 'Description', visible: false, extract: item => truncate(item?.description, 80) },
+    { key: 'source', header: 'Source', visible: false, extract: item => item?.source || '' },
+    { key: 'scanner', header: 'Scanner', visible: false, extract: item => item?.scanner || '' },
+    { key: 'cwes', header: 'CWEs', visible: false, extract: formatCwes },
+    { key: 'urls', header: 'References', visible: false, extract: formatUrls },
+    { key: 'related', header: 'Related', visible: false, extract: formatRelated }
+  ];
+
+  // Comparison-specific column (presence indicator)
+  const PRESENCE_COLUMN = {
+    key: 'presence',
+    header: 'Presence',
+    visible: true,
+    extract: item => item?.comparison || ''
+  };
+
+  const COMPARISON_COLUMN_STORAGE_KEY = 'vma.image.comparison.columns';
+
+  function loadComparisonColumnVisibility() {
+    try {
+      const raw = localStorage.getItem(COMPARISON_COLUMN_STORAGE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch { return null; }
+  }
+
+  function saveComparisonColumnVisibility(visibility) {
+    try {
+      localStorage.setItem(COMPARISON_COLUMN_STORAGE_KEY, JSON.stringify(visibility));
+    } catch { /* ignore quota errors */ }
+  }
+
+  function getComparisonColumns() {
+    // Insert presence column after severity
+    const cols = [...SCA_COLUMNS];
+    const severityIdx = cols.findIndex(c => c.key === 'severity');
+    cols.splice(severityIdx + 1, 0, PRESENCE_COLUMN);
+    return cols;
+  }
+
+  function getDefaultComparisonVisibility() {
+    const vis = {};
+    getComparisonColumns().forEach(col => { vis[col.key] = col.visible; });
+    return vis;
+  }
+
+  function getVisibleComparisonColumns(state) {
+    const vis = state.comparisonColumnVisibility || getDefaultComparisonVisibility();
+    return getComparisonColumns().filter(col => vis[col.key]);
+  }
+
+  function loadColumnVisibility() {
+    try {
+      const raw = localStorage.getItem(COLUMN_STORAGE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch { return null; }
+  }
+
+  function saveColumnVisibility(visibility) {
+    try {
+      localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(visibility));
+    } catch { /* ignore quota errors */ }
+  }
+
+  function getDefaultVisibility() {
+    const vis = {};
+    SCA_COLUMNS.forEach(col => { vis[col.key] = col.visible; });
+    return vis;
+  }
+
+  function getVisibleColumns(state) {
+    const vis = state.columnVisibility || getDefaultVisibility();
+    return SCA_COLUMNS.filter(col => vis[col.key]);
+  }
+
+  function getSeverityBadgeClass(level) {
+    if (!level) return 'severity-none';
+    const lower = String(level).toLowerCase();
+    if (lower === 'critical') return 'severity-critical';
+    if (lower === 'high') return 'severity-high';
+    if (lower === 'medium') return 'severity-medium';
+    if (lower === 'low') return 'severity-low';
+    return 'severity-none';
+  }
+
+
+  function parseImageRecord(image) {
+    if (!image) {
+      return { name: '', version: '', product: '', team: '' };
+    }
+
+    if (Array.isArray(image)) {
+      return {
+        name: image[0] ?? '',
+        version: image[1] ?? '',
+        product: image[2] ?? '',
+        team: image[3] ?? ''
+      };
+    }
+
+    if (typeof image === 'object') {
+      return {
+        name: image.name ?? '',
+        version: image.version ?? '',
+        product: image.product ?? '',
+        team: image.team ?? image.team_id ?? ''
+      };
+    }
+
+    return { name: '', version: '', product: '', team: '' };
+  }
+
+  function getImageNamesByProduct(images, productId) {
+    if (!Array.isArray(images) || !productId) {
+      return [];
+    }
+    const names = images
+      .filter(image => image && image.product === productId)
+      .map(image => image.name)
+      .filter(Boolean);
+    const unique = Array.from(new Set(names));
+    unique.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    return unique;
+  }
+
+  function getVersionsForImage(images, productId, imageName) {
+    if (!Array.isArray(images) || !productId || !imageName) {
+      return [];
+    }
+    const versions = images
+      .filter(image => image && image.product === productId && image.name === imageName)
+      .map(image => image.version)
+      .filter(Boolean);
+    const unique = Array.from(new Set(versions));
+    unique.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    return unique;
+  }
+
+  function findProductRecord(products, productId) {
+    if (!Array.isArray(products) || !productId) {
+      return null;
+    }
+    return (
+      products.find(product => (product.id ?? product.name ?? product[0]) === productId) ||
+      null
+    );
+  }
+
+  function getTeamForProduct(products, productId) {
+    const record = findProductRecord(products, productId);
+    if (!record) {
+      return '';
+    }
+    return record.team ?? record.team_id ?? record.teamName ?? record[2] ?? '';
+  }
+
+  function resetSelectOptions(select, placeholder) {
+    selectHelpers.reset(select, placeholder);
+  }
+
+  function getUniqueTeamsFromProducts(products) {
+    if (!Array.isArray(products)) {
+      return [];
+    }
+    const names = products
+      .map(product => product.team ?? product.team_id ?? product[2])
+      .filter(Boolean);
+    const unique = Array.from(new Set(names));
+    unique.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    return unique;
+  }
+
+  function getTeamsForImageForm(state) {
+    const scopeTeams = auth.getWritableTeams?.() || [];
+    const teamsFromScope = scopeTeams.map(team => team.name).filter(Boolean);
+    const productTeams = getUniqueTeamsFromProducts(state?.data?.products || []);
+
+    if (auth.isRoot?.()) {
+      return productTeams.length ? productTeams : teamsFromScope;
+    }
+
+    if (teamsFromScope.length) {
+      return teamsFromScope;
+    }
+
+    return productTeams;
+  }
+
+  function populateImageTeamOptions(state) {
+    if (!state?.teamSelect) {
+      return;
+    }
+    const select = state.teamSelect;
+    const teams = getTeamsForImageForm(state);
+    const previous = select.value;
+    select.innerHTML = '';
+
+    if (!teams.length) {
+      select.innerHTML = '<option value="">No teams available</option>';
+      select.disabled = true;
+      updateImageProductOptions(state);
+      return;
+    }
+
+    const placeholder = createElementWithAttrs('option', 'Select a team…', { value: '' });
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    select.appendChild(placeholder);
+
+    teams.forEach(name => {
+      const option = createElementWithAttrs('option', name, { value: name });
+      select.appendChild(option);
+    });
+
+    if (teams.includes(previous)) {
+      select.value = previous;
+      placeholder.selected = false;
+    } else {
+      select.value = '';
+    }
+
+    select.disabled = false;
+    updateImageProductOptions(state);
+  }
+
+  function updateImageProductOptions(state) {
+    if (!state?.productSelect) {
+      return;
+    }
+    const select = state.productSelect;
+    const team = state.teamSelect?.value || '';
+    const placeholder = team ? 'Select a product…' : 'Select a team first…';
+    resetSelectOptions(select, placeholder);
+    select.disabled = true;
+
+    if (!team) {
+      return;
+    }
+
+    const products = Array.isArray(state?.data?.products) ? state.data.products : [];
+    const filtered = products.filter(
+      product => (product.team ?? product.team_id ?? product[2]) === team
+    );
+    filtered.forEach(product => {
+      const value = product.id ?? product.name ?? product[0];
+      if (!value) {
         return;
+      }
+      select.appendChild(createElementWithAttrs('option', value, { value }));
+    });
+
+    select.disabled = !filtered.length;
+  }
+
+  const COMPARISON_LABELS = {
+    shared: 'Shared',
+    only_version_a: 'Only Version A',
+    only_version_b: 'Only Version B'
+  };
+
+  const COMPARISON_BADGE_CLASSES = {
+    shared: 'badge badge-shared',
+    only_version_a: 'badge badge-only-a',
+    only_version_b: 'badge badge-only-b'
+  };
+
+  function getComparisonLabel(state, key) {
+    const fallback = COMPARISON_LABELS[key] || key;
+    if (!state || !state.compareSelections) {
+      return fallback;
     }
 
-    /* ---- SCA column definitions ---- */
+    const { baseVersion, targetVersion } = state.compareSelections;
+    if (key === 'only_version_a') {
+      return baseVersion ? `Only ${baseVersion}` : fallback;
+    }
+    if (key === 'only_version_b') {
+      return targetVersion ? `Only ${targetVersion}` : fallback;
+    }
+    return fallback;
+  }
 
-    const COLUMN_STORAGE_KEY = 'vma.image.columns';
 
-    function truncate(str, max) {
-        if (!str) return '';
-        return str.length > max ? str.slice(0, max) + '…' : str;
+  function updateSelectOptions(select, products, placeholder) {
+    selectHelpers.populate(select, products, {
+      valueKey: item => item.id ?? item.name,
+      labelKey: item => item.id ?? item.name,
+      placeholder: placeholder,
+      preserveValue: true
+    });
+  }
+
+  function resetCompareSelections(state, { preserveProduct = false } = {}) {
+    if (!state) {
+      return;
     }
 
-    function formatFixVersions(item) {
-        const fix = item?.fix;
-        if (!fix) return '—';
-        const versions = Array.isArray(fix.versions) ? fix.versions : [];
-        return versions.length ? versions.join(', ') : '—';
+    if (!preserveProduct) {
+      state.compareSelections.product = '';
+      if (state.compareProductSelect) {
+        state.compareProductSelect.value = '';
+      }
+    } else {
+      state.compareSelections.product = state.compareProductSelect?.value || state.compareSelections.product || '';
     }
 
-    function formatEpss(item) {
-        const epss = Array.isArray(item?.epss) ? item.epss : [];
-        if (!epss.length) return '—';
-        const e = epss[0];
-        const score = e?.epss ?? e?.score;
-        if (score === undefined || score === null) return '—';
-        const pct = (score * 100).toFixed(2) + '%';
-        const percentile = e?.percentile;
-        if (percentile !== undefined && percentile !== null) {
-            return `${pct} (P${(percentile * 100).toFixed(1)})`;
-        }
-        return pct;
+    state.compareSelections.image = '';
+    state.compareSelections.baseVersion = '';
+    state.compareSelections.targetVersion = '';
+
+    const hasProduct = preserveProduct && Boolean(state.compareProductSelect?.value);
+    const imagePlaceholder = hasProduct ? 'Select an image…' : 'Select a product first…';
+    resetSelectOptions(state.compareImageSelect, imagePlaceholder);
+    resetSelectOptions(state.compareBaseSelect, 'Select version A…');
+    resetSelectOptions(state.compareTargetSelect, 'Select version B…');
+
+    if (state.compareImageSelect) {
+      state.compareImageSelect.disabled = true;
+    }
+    if (state.compareBaseSelect) {
+      state.compareBaseSelect.disabled = true;
+    }
+    if (state.compareTargetSelect) {
+      state.compareTargetSelect.disabled = true;
+    }
+  }
+
+  function updateCompareVersionOptions(state) {
+    const { compareProductSelect, compareImageSelect, compareBaseSelect, compareTargetSelect, compareSelections } = state;
+    if (!compareBaseSelect || !compareTargetSelect) {
+      return [];
     }
 
-    function formatCvssAggregated(item) {
-        const cvss = Array.isArray(item?.cvss) ? item.cvss : [];
-        if (!cvss.length) return '—';
-        const byVersion = {};
-        for (const entry of cvss) {
-            const ver = entry.version || '?';
-            if (!byVersion[ver] || entry.type === 'Primary') {
+    resetSelectOptions(compareBaseSelect, 'Select version A…');
+    resetSelectOptions(compareTargetSelect, 'Select version B…');
+    compareBaseSelect.disabled = true;
+    compareTargetSelect.disabled = true;
+
+    const product = compareProductSelect?.value || '';
+    const image = compareImageSelect?.value || '';
+
+    if (!product || !image) {
+      compareSelections.baseVersion = '';
+      compareSelections.targetVersion = '';
+      return [];
+    }
+
+    const versions = getVersionsForImage(state.data.images, product, image);
+    versions.forEach(version => {
+      compareBaseSelect.appendChild(createElementWithAttrs('option', version, { value: version }));
+      compareTargetSelect.appendChild(createElementWithAttrs('option', version, { value: version }));
+    });
+
+    if (versions.length) {
+      compareBaseSelect.disabled = false;
+      compareTargetSelect.disabled = false;
+    }
+
+    if (versions.includes(compareSelections.baseVersion)) {
+      compareBaseSelect.value = compareSelections.baseVersion;
+    } else {
+      compareSelections.baseVersion = '';
+    }
+
+    if (versions.includes(compareSelections.targetVersion)) {
+      compareTargetSelect.value = compareSelections.targetVersion;
+    } else {
+      compareSelections.targetVersion = '';
+    }
+
+    if (compareBaseSelect.value && compareBaseSelect.value === compareTargetSelect.value) {
+      compareTargetSelect.value = '';
+      compareSelections.targetVersion = '';
+    }
+
+    return versions;
+  }
+
+  function updateCompareImageOptions(state) {
+    const { compareProductSelect, compareImageSelect, compareSelections } = state;
+    if (!compareImageSelect) {
+      return [];
+    }
+
+    const product = compareProductSelect?.value || '';
+    const placeholder = product ? 'Select an image…' : 'Select a product first…';
+    resetSelectOptions(compareImageSelect, placeholder);
+    compareImageSelect.disabled = true;
+
+    if (!product) {
+      compareSelections.image = '';
+      updateCompareVersionOptions(state);
+      return [];
+    }
+
+    const imageNames = getImageNamesByProduct(state.data.images, product);
+    imageNames.forEach(name => {
+      compareImageSelect.appendChild(createElementWithAttrs('option', name, { value: name }));
+    });
+
+    if (imageNames.length) {
+      compareImageSelect.disabled = false;
+    }
+
+    if (imageNames.includes(compareSelections.image)) {
+      compareImageSelect.value = compareSelections.image;
+    } else {
+      compareSelections.image = '';
+    }
+
+    return updateCompareVersionOptions(state);
+  }
+
+  function syncCompareSelectors(state) {
+    if (!state || !state.compareProductSelect) {
+      return;
+    }
+
+    state.compareSelections.product = state.compareProductSelect.value || '';
+    if (!state.compareSelections.product) {
+      resetCompareSelections(state, { preserveProduct: true });
+      updateCompareVersionOptions(state);
+      return;
+    }
+
+    updateCompareImageOptions(state);
+  }
+
+  function resetComparisonResults(state, message = 'Run a comparison to see results.', options = {}) {
+    if (!state) {
+      return;
+    }
+
+    const { keepVisible = false } = options;
+    const colCount = getVisibleComparisonColumns(state).length;
+
+    if (state.compareResultsRows) {
+      state.compareResultsRows.innerHTML = `<tr><td colspan="${colCount}" class="empty">${message}</td></tr>`;
+    }
+    if (state.compareResultsContainer) {
+      state.compareResultsContainer.hidden = !keepVisible;
+    }
+    if (state.compareResultsSearch) {
+      state.compareResultsSearch.value = '';
+    }
+    if (state.compareResultsMeta) {
+      state.compareResultsMeta.textContent = '';
+    }
+    if (state.compareResultsTitle) {
+      state.compareResultsTitle.textContent = 'Comparison Results';
+    }
+    if (state.compareSummary) {
+      state.compareSummary.innerHTML = '';
+      state.compareSummary.hidden = true;
+    }
+    state.currentComparison = [];
+    state.compareStats = {};
+    state.compareActiveFilter = null;
+  }
+
+  function resetDeleteSelections(state) {
+    if (!state) {
+      return;
+    }
+
+    state.deleteSelections = state.deleteSelections || { product: '', image: '', version: '' };
+
+    if (state.deleteProductSelect) {
+      state.deleteProductSelect.value = state.deleteSelections.product || '';
+    }
+
+    resetSelectOptions(
+      state.deleteImageSelect,
+      state.deleteSelections.product ? 'Select an image…' : 'Select a product first…'
+    );
+    resetSelectOptions(state.deleteVersionSelect, 'All versions');
+
+    if (state.deleteImageSelect) {
+      state.deleteImageSelect.disabled = true;
+    }
+    if (state.deleteVersionSelect) {
+      state.deleteVersionSelect.disabled = true;
+    }
+  }
+
+  function updateDeleteImageOptions(state) {
+    const { deleteProductSelect, deleteImageSelect, deleteVersionSelect, deleteSelections } = state;
+    if (!deleteImageSelect) {
+      return;
+    }
+
+    const product = deleteProductSelect?.value || '';
+    const placeholder = product ? 'Select an image…' : 'Select a product first…';
+    resetSelectOptions(deleteImageSelect, placeholder);
+    resetSelectOptions(deleteVersionSelect, 'All versions');
+    deleteImageSelect.disabled = true;
+    deleteVersionSelect.disabled = true;
+
+    if (!product) {
+      deleteSelections.product = '';
+      deleteSelections.image = '';
+      deleteSelections.version = '';
+      return;
+    }
+
+    const imageNames = getImageNamesByProduct(state.data.images, product);
+    imageNames.forEach(name => {
+      deleteImageSelect.appendChild(createElementWithAttrs('option', name, { value: name }));
+    });
+
+    if (imageNames.length) {
+      deleteImageSelect.disabled = false;
+    }
+
+    if (imageNames.includes(deleteSelections.image)) {
+      deleteImageSelect.value = deleteSelections.image;
+    } else {
+      deleteSelections.image = '';
+    }
+
+    updateDeleteVersionOptions(state);
+  }
+
+  function updateDeleteVersionOptions(state) {
+    const { deleteProductSelect, deleteImageSelect, deleteVersionSelect, deleteSelections } = state;
+    if (!deleteVersionSelect) {
+      return;
+    }
+
+    const product = deleteProductSelect?.value || '';
+    const image = deleteImageSelect?.value || '';
+    resetSelectOptions(deleteVersionSelect, 'All versions');
+    deleteVersionSelect.disabled = true;
+
+    if (!product || !image) {
+      deleteSelections.version = '';
+      return;
+    }
+
+    const versions = getVersionsForImage(state.data.images, product, image);
+    versions.forEach(version => {
+      deleteVersionSelect.appendChild(createElementWithAttrs('option', version, { value: version }));
+    });
+
+    if (versions.length) {
+      deleteVersionSelect.disabled = false;
+    }
+
+    if (versions.includes(deleteSelections.version)) {
+      deleteVersionSelect.value = deleteSelections.version;
+    } else {
+      deleteSelections.version = '';
+      deleteVersionSelect.value = '';
+    }
+  }
+
+  function syncDeleteSelectors(state) {
+    if (!state || !state.deleteProductSelect) {
+      return;
+    }
+    state.deleteSelections.product = state.deleteProductSelect.value || state.deleteSelections.product || '';
+    updateDeleteImageOptions(state);
+  }
+
+  function renderComparisonTableHeader(state) {
+    const { compareResultsThead, comparisonSort } = state;
+    if (!compareResultsThead) return;
+    const tr = compareResultsThead.querySelector('tr') || document.createElement('tr');
+    tr.innerHTML = '';
+    getVisibleComparisonColumns(state).forEach(col => {
+      const th = createSortableHeader(col.header, col.key, comparisonSort, (key) => {
+        state.comparisonSort = toggleSortDirection(state.comparisonSort, key);
+        saveSortState('comparison', state.comparisonSort);
+        renderComparisonTableHeader(state);
+        applyComparisonSearch(state);
+      });
+      tr.appendChild(th);
+    });
+    if (!tr.parentNode) compareResultsThead.appendChild(tr);
+  }
+
+  function renderComparisonRows(state, items, emptyMessage = 'No vulnerabilities found for this comparison.') {
+    if (!state || !state.compareResultsRows) {
+      return;
+    }
+
+    const target = state.compareResultsRows;
+    target.innerHTML = '';
+
+    const visCols = getVisibleComparisonColumns(state);
+
+    if (!Array.isArray(items) || !items.length) {
+      target.innerHTML = `<tr><td colspan="${visCols.length}" class="empty">${emptyMessage}</td></tr>`;
+      return;
+    }
+
+    items.forEach(item => {
+      const row = document.createElement('tr');
+      visCols.forEach(col => {
+        if (col.key === 'cvss') {
+          const cvssArr = Array.isArray(item?.cvss) ? item.cvss : [];
+          const td = document.createElement('td');
+          td.className = 'cvss-cell';
+          if (cvssArr.length) {
+            const byVersion = {};
+            for (const entry of cvssArr) {
+              const ver = entry.version || '?';
+              if (!byVersion[ver] || entry.type === 'Primary') {
                 byVersion[ver] = entry;
+              }
             }
+            const chips = Object.entries(byVersion).map(([ver, e]) => {
+              const score = e.metrics?.baseScore ?? e.score ?? '—';
+              return `<span class="cvss-chip" title="${e.source || ''} (${e.type || ''})"><span class="cvss-chip--muted">v${ver}</span> ${score}</span>`;
+            });
+            td.innerHTML = `<div class="cvss-stack">${chips.join('')}</div>`;
+          } else {
+            td.textContent = '—';
+          }
+          row.appendChild(td);
+        } else if (col.key === 'epss') {
+          const td = document.createElement('td');
+          const epssArr = Array.isArray(item?.epss) ? item.epss : [];
+          if (epssArr.length) {
+            const e = epssArr[0];
+            const score = e?.epss ?? e?.score;
+            if (score !== undefined && score !== null) {
+              const pct = (score * 100).toFixed(2) + '%';
+              const percentile = e?.percentile;
+              if (percentile !== undefined && percentile !== null) {
+                td.innerHTML = `<span class="epss-score">${pct}</span> <span class="epss-percentile" title="Percentile">P${(percentile * 100).toFixed(1)}</span>`;
+              } else {
+                td.textContent = pct;
+              }
+            } else {
+              td.textContent = '—';
+            }
+          } else {
+            td.textContent = '—';
+          }
+          row.appendChild(td);
+        } else if (col.key === 'severity') {
+          const td = document.createElement('td');
+          const level = item?.severity_level || '';
+          const badge = document.createElement('span');
+          badge.className = `severity-badge ${getSeverityBadgeClass(level)}`;
+          badge.textContent = level || '—';
+          td.appendChild(badge);
+          row.appendChild(td);
+        } else if (col.key === 'presence') {
+          const td = document.createElement('td');
+          const comparisonKey = item?.comparison;
+          const badgeClass = COMPARISON_BADGE_CLASSES[comparisonKey] || 'badge';
+          const label = getComparisonLabel(state, comparisonKey);
+          const badge = document.createElement('span');
+          badge.className = badgeClass;
+          badge.textContent = label;
+          td.appendChild(badge);
+          row.appendChild(td);
+        } else {
+          const text = col.extract(item);
+          row.appendChild(createElementWithAttrs('td', text || '—'));
         }
-        return Object.entries(byVersion)
-            .map(([ver, e]) => {
-                const score = e.metrics?.baseScore ?? e.score ?? '?';
-                return `v${ver}: ${score}`;
-            })
-            .join(' | ');
+      });
+      target.appendChild(row);
+    });
+  }
+
+  function updateComparisonStats(state, stats = {}) {
+    if (!state || !state.compareSummary) {
+      return;
     }
 
-    function formatCwes(item) {
-        const cwes = Array.isArray(item?.cwes) ? item.cwes : [];
-        if (!cwes.length) return '—';
-        const ids = [...new Set(cwes.map(c => {
-            if (typeof c === 'string') return c;
-            return c.cwe || c.id || c.cweId || '';
-        }).filter(Boolean))];
-        return ids.join(', ');
-    }
-
-    function formatUrls(item) {
-        const urls = Array.isArray(item?.urls) ? item.urls : [];
-        if (!urls.length) return '—';
-        return `${urls.length} ref${urls.length === 1 ? '' : 's'}`;
-    }
-
-    function formatRelated(item) {
-        const rel = Array.isArray(item?.related_vulnerabilities) ? item.related_vulnerabilities : [];
-        if (!rel.length) return '—';
-        return rel.map(r => (typeof r === 'string' ? r : r.id || '')).filter(Boolean).join(', ');
-    }
-
-    const SCA_COLUMNS = [
-        { key: 'vuln_id',    header: 'CVE',          visible: true,  extract: item => item?.vuln_id || '' },
-        { key: 'severity',   header: 'Severity',     visible: true,  extract: item => item?.severity_level || '' },
-        { key: 'component',  header: 'Component',    visible: true,  extract: item => item?.affected_component || '' },
-        { key: 'version',    header: 'Version',      visible: true,  extract: item => item?.affected_version || '' },
-        { key: 'type',       header: 'Type',         visible: true,  extract: item => item?.affected_component_type || '' },
-        { key: 'fix',        header: 'Fix Versions',  visible: true,  extract: formatFixVersions },
-        { key: 'cvss',       header: 'CVSS',         visible: true,  extract: formatCvssAggregated },
-        { key: 'epss',       header: 'EPSS',         visible: false, extract: formatEpss },
-        { key: 'path',       header: 'Path',         visible: false, extract: item => item?.affected_path || '' },
-        { key: 'description',header: 'Description',  visible: false, extract: item => truncate(item?.description, 80) },
-        { key: 'source',     header: 'Source',       visible: false, extract: item => item?.source || '' },
-        { key: 'scanner',    header: 'Scanner',      visible: false, extract: item => item?.scanner || '' },
-        { key: 'cwes',       header: 'CWEs',         visible: false, extract: formatCwes },
-        { key: 'urls',       header: 'References',   visible: false, extract: formatUrls },
-        { key: 'related',    header: 'Related',      visible: false, extract: formatRelated }
+    const summary = state.compareSummary;
+    state.compareStats = stats || {};
+    const entries = [
+      {
+        key: 'shared',
+        count: stats.shared ?? 0,
+        className: COMPARISON_BADGE_CLASSES.shared || 'badge'
+      },
+      {
+        key: 'only_version_a',
+        count: stats.only_version_a ?? 0,
+        className: COMPARISON_BADGE_CLASSES.only_version_a || 'badge'
+      },
+      {
+        key: 'only_version_b',
+        count: stats.only_version_b ?? 0,
+        className: COMPARISON_BADGE_CLASSES.only_version_b || 'badge'
+      }
     ];
 
-    function loadColumnVisibility() {
-        try {
-            const raw = localStorage.getItem(COLUMN_STORAGE_KEY);
-            if (!raw) return null;
-            return JSON.parse(raw);
-        } catch { return null; }
+    const activeKey = state.compareActiveFilter;
+    const hasActiveData = entries.some(entry => entry.key === activeKey && entry.count > 0);
+    if (activeKey && !hasActiveData) {
+      state.compareActiveFilter = null;
     }
 
-    function saveColumnVisibility(visibility) {
-        try {
-            localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(visibility));
-        } catch { /* ignore quota errors */ }
+    const hasData = entries.some(entry => entry.count > 0);
+    summary.innerHTML = '';
+    if (!hasData) {
+      summary.hidden = true;
+      return;
     }
 
-    function getDefaultVisibility() {
-        const vis = {};
-        SCA_COLUMNS.forEach(col => { vis[col.key] = col.visible; });
-        return vis;
+    summary.hidden = false;
+
+    entries.forEach(({ key, count, className }) => {
+      const isActive = state.compareActiveFilter === key;
+      const button = createElementWithAttrs('button', '', {
+        type: 'button',
+        class: `compare-filter${isActive ? ' compare-filter--active' : ''}`,
+        'data-compare-filter': key
+      });
+      button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+      const labelText = getComparisonLabel(state, key);
+      button.setAttribute('aria-label', `${labelText} (${count})`);
+      if (!count) {
+        button.disabled = true;
+        button.setAttribute('aria-disabled', 'true');
+      } else {
+        button.setAttribute('aria-disabled', 'false');
+      }
+
+      const labelSpan = createElementWithAttrs(
+        'span',
+        labelText,
+        { class: `${className} compare-filter__label` }
+      );
+      const countSpan = createElementWithAttrs('span', `(${count})`, { class: 'compare-filter__count' });
+
+      button.appendChild(labelSpan);
+      button.appendChild(countSpan);
+      summary.appendChild(button);
+    });
+  }
+
+  function applyComparisonSearch(state) {
+    if (!state) {
+      return;
     }
+    const source = Array.isArray(state.currentComparison) ? state.currentComparison : [];
+    const filterKey = state.compareActiveFilter;
+    const { comparisonSort } = state;
 
-    function getVisibleColumns(state) {
-        const vis = state.columnVisibility || getDefaultVisibility();
-        return SCA_COLUMNS.filter(col => vis[col.key]);
-    }
+    // Apply presence filter
+    let result = filterKey
+      ? source.filter(item => item?.comparison === filterKey)
+      : source;
 
-    function getSeverityBadgeClass(level) {
-        if (!level) return 'severity-none';
-        const lower = String(level).toLowerCase();
-        if (lower === 'critical') return 'severity-critical';
-        if (lower === 'high') return 'severity-high';
-        if (lower === 'medium') return 'severity-medium';
-        if (lower === 'low') return 'severity-low';
-        return 'severity-none';
-    }
-
-
-    function parseImageRecord(image) {
-        if (!image) {
-            return { name: '', version: '', product: '', team: '' };
-        }
-
-        if (Array.isArray(image)) {
-            return {
-                name: image[0] ?? '',
-                version: image[1] ?? '',
-                product: image[2] ?? '',
-                team: image[3] ?? ''
-            };
-        }
-
-        if (typeof image === 'object') {
-            return {
-                name: image.name ?? '',
-                version: image.version ?? '',
-                product: image.product ?? '',
-                team: image.team ?? image.team_id ?? ''
-            };
-        }
-
-        return { name: '', version: '', product: '', team: '' };
-    }
-
-    function getImageNamesByProduct(images, productId) {
-        if (!Array.isArray(images) || !productId) {
-            return [];
-        }
-        const names = images
-            .filter(image => image && image.product === productId)
-            .map(image => image.name)
-            .filter(Boolean);
-        const unique = Array.from(new Set(names));
-        unique.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-        return unique;
-    }
-
-    function getVersionsForImage(images, productId, imageName) {
-        if (!Array.isArray(images) || !productId || !imageName) {
-            return [];
-        }
-        const versions = images
-            .filter(image => image && image.product === productId && image.name === imageName)
-            .map(image => image.version)
-            .filter(Boolean);
-        const unique = Array.from(new Set(versions));
-        unique.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
-        return unique;
-    }
-
-    function findProductRecord(products, productId) {
-        if (!Array.isArray(products) || !productId) {
-            return null;
-        }
-        return (
-            products.find(product => (product.id ?? product.name ?? product[0]) === productId) ||
-            null
-        );
-    }
-
-    function getTeamForProduct(products, productId) {
-        const record = findProductRecord(products, productId);
-        if (!record) {
-            return '';
-        }
-        return record.team ?? record.team_id ?? record.teamName ?? record[2] ?? '';
-    }
-
-    function resetSelectOptions(select, placeholder) {
-        selectHelpers.reset(select, placeholder);
-    }
-
-    function getUniqueTeamsFromProducts(products) {
-        if (!Array.isArray(products)) {
-            return [];
-        }
-        const names = products
-            .map(product => product.team ?? product.team_id ?? product[2])
-            .filter(Boolean);
-        const unique = Array.from(new Set(names));
-        unique.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-        return unique;
-    }
-
-    function getTeamsForImageForm(state) {
-        const scopeTeams = auth.getWritableTeams?.() || [];
-        const teamsFromScope = scopeTeams.map(team => team.name).filter(Boolean);
-        const productTeams = getUniqueTeamsFromProducts(state?.data?.products || []);
-
-        if (auth.isRoot?.()) {
-            return productTeams.length ? productTeams : teamsFromScope;
-        }
-
-        if (teamsFromScope.length) {
-            return teamsFromScope;
-        }
-
-        return productTeams;
-    }
-
-    function populateImageTeamOptions(state) {
-        if (!state?.teamSelect) {
-            return;
-        }
-        const select = state.teamSelect;
-        const teams = getTeamsForImageForm(state);
-        const previous = select.value;
-        select.innerHTML = '';
-
-        if (!teams.length) {
-            select.innerHTML = '<option value="">No teams available</option>';
-            select.disabled = true;
-            updateImageProductOptions(state);
-            return;
-        }
-
-        const placeholder = createElementWithAttrs('option', 'Select a team…', { value: '' });
-        placeholder.disabled = true;
-        placeholder.selected = true;
-        select.appendChild(placeholder);
-
-        teams.forEach(name => {
-            const option = createElementWithAttrs('option', name, { value: name });
-            select.appendChild(option);
+    // Apply text search
+    const term = state.compareResultsSearch?.value?.trim().toLowerCase();
+    if (term) {
+      const visCols = getVisibleComparisonColumns(state);
+      result = result.filter(item => {
+        return visCols.some(col => {
+          let text = '';
+          if (col.key === 'cvss') {
+            const cvssArr = Array.isArray(item?.cvss) ? item.cvss : [];
+            text = cvssArr.map(c => `${c.score ?? ''} ${c.severity ?? ''} ${c.version ? 'v' + c.version : ''}`).join(' ');
+          } else if (col.key === 'severity') {
+            text = item?.severity_level || '';
+          } else if (col.key === 'presence') {
+            text = getComparisonLabel(state, item?.comparison);
+          } else {
+            text = col.extract(item);
+          }
+          return text && String(text).toLowerCase().includes(term);
         });
-
-        if (teams.includes(previous)) {
-            select.value = previous;
-            placeholder.selected = false;
-        } else {
-            select.value = '';
-        }
-
-        select.disabled = false;
-        updateImageProductOptions(state);
+      });
     }
 
-    function updateImageProductOptions(state) {
-        if (!state?.productSelect) {
-            return;
-        }
-        const select = state.productSelect;
-        const team = state.teamSelect?.value || '';
-        const placeholder = team ? 'Select a product…' : 'Select a team first…';
-        resetSelectOptions(select, placeholder);
-        select.disabled = true;
+    // Apply sorting
+    if (comparisonSort?.key) {
+      result = sortItems(result, comparisonSort.key, comparisonSort.direction, getComparisonColumns());
+    }
 
-        if (!team) {
-            return;
-        }
+    const emptyMessage = filterKey && source.length
+      ? 'No comparison entries in this category.'
+      : (term ? 'No comparison entries match this search.' : 'No vulnerabilities found for this comparison.');
 
-        const products = Array.isArray(state?.data?.products) ? state.data.products : [];
-        const filtered = products.filter(
-            product => (product.team ?? product.team_id ?? product[2]) === team
-        );
-        filtered.forEach(product => {
-            const value = product.id ?? product.name ?? product[0];
-            if (!value) {
-                return;
-            }
-            select.appendChild(createElementWithAttrs('option', value, { value }));
+    renderComparisonRows(state, result, emptyMessage);
+  }
+
+  function renderListTableHeader(state) {
+    const { listThead, listSort } = state;
+    if (!listThead) return;
+
+    const tr = listThead.querySelector('tr') || document.createElement('tr');
+    tr.innerHTML = '';
+
+    LIST_COLUMNS.forEach(col => {
+      if (col.sortable) {
+        const th = createSortableHeader(col.header, col.key, listSort, (key) => {
+          state.listSort = toggleSortDirection(state.listSort, key);
+          saveSortState('list', state.listSort);
+          renderListTableHeader(state);
+          const filterValue = state.filterSelect?.value || '';
+          const filtered = filterValue
+            ? state.data.images.filter(image => (image.product ?? image[2]) === filterValue)
+            : state.data.images;
+          renderImageRows(state, filtered, filterValue);
         });
+        tr.appendChild(th);
+      } else {
+        const th = document.createElement('th');
+        th.textContent = col.header;
+        tr.appendChild(th);
+      }
+    });
 
-        select.disabled = !filtered.length;
+    if (!tr.parentNode) listThead.appendChild(tr);
+  }
+
+  function renderImageRows(state, filteredImages, filterValue) {
+    const { rowsBody, counter, listSort } = state;
+    if (!rowsBody || !counter) {
+      return;
     }
 
-    const COMPARISON_LABELS = {
-        shared: 'Shared',
-        only_version_a: 'Only Version A',
-        only_version_b: 'Only Version B'
-    };
-
-    const COMPARISON_BADGE_CLASSES = {
-        shared: 'badge badge-shared',
-        only_version_a: 'badge badge-only-a',
-        only_version_b: 'badge badge-only-b'
-    };
-
-    function getComparisonLabel(state, key) {
-        const fallback = COMPARISON_LABELS[key] || key;
-        if (!state || !state.compareSelections) {
-            return fallback;
-        }
-
-        const { baseVersion, targetVersion } = state.compareSelections;
-        if (key === 'only_version_a') {
-            return baseVersion ? `Only ${baseVersion}` : fallback;
-        }
-        if (key === 'only_version_b') {
-            return targetVersion ? `Only ${targetVersion}` : fallback;
-        }
-        return fallback;
+    if (!Array.isArray(filteredImages) || !filteredImages.length) {
+      const message = filterValue ? 'No images match this product.' : 'No images yet.';
+      rowsBody.innerHTML = '';
+      const row = document.createElement('tr');
+      const cell = createElementWithAttrs('td', message, { colspan: '4', class: 'empty' });
+      row.appendChild(cell);
+      rowsBody.appendChild(row);
+      counter.textContent = '0';
+      return;
     }
 
+    // Apply sorting
+    const sorted = sortItems(filteredImages, listSort?.key, listSort?.direction);
 
-    function updateSelectOptions(select, products, placeholder) {
-        selectHelpers.populate(select, products, {
-            valueKey: item => item.id ?? item.name,
-            labelKey: item => item.id ?? item.name,
-            placeholder: placeholder,
-            preserveValue: true
-        });
+    rowsBody.innerHTML = '';
+    sorted.forEach(image => {
+      const name = image.name ?? image[0] ?? '—';
+      const version = image.version ?? image[1] ?? '—';
+      const productId = image.product ?? image[2] ?? '—';
+      const teamId = image.team ?? image.team_id ?? image[3] ?? '';
+
+      const row = document.createElement('tr');
+      row.appendChild(createElementWithAttrs('td', name));
+      row.appendChild(createElementWithAttrs('td', version));
+      row.appendChild(createElementWithAttrs('td', productId));
+      const actionCell = document.createElement('td');
+      const detailsButton = createElementWithAttrs('button', 'View details', {
+        type: 'button',
+        class: 'btn link',
+        'data-image-action': 'details',
+        'data-image-name': name,
+        'data-image-version': version,
+        'data-image-product': productId,
+        'data-image-team': teamId
+      });
+      actionCell.appendChild(detailsButton);
+      row.appendChild(actionCell);
+      rowsBody.appendChild(row);
+    });
+
+    counter.textContent = sorted.length;
+  }
+
+  function renderImagesPage() {
+    const root = document.getElementById('vmaContent');
+    if (!root) {
+      return null;
     }
 
-    function resetCompareSelections(state, { preserveProduct = false } = {}) {
-        if (!state) {
-            return;
-        }
-
-        if (!preserveProduct) {
-            state.compareSelections.product = '';
-            if (state.compareProductSelect) {
-                state.compareProductSelect.value = '';
-            }
-        } else {
-            state.compareSelections.product = state.compareProductSelect?.value || state.compareSelections.product || '';
-        }
-
-        state.compareSelections.image = '';
-        state.compareSelections.baseVersion = '';
-        state.compareSelections.targetVersion = '';
-
-        const hasProduct = preserveProduct && Boolean(state.compareProductSelect?.value);
-        const imagePlaceholder = hasProduct ? 'Select an image…' : 'Select a product first…';
-        resetSelectOptions(state.compareImageSelect, imagePlaceholder);
-        resetSelectOptions(state.compareBaseSelect, 'Select version A…');
-        resetSelectOptions(state.compareTargetSelect, 'Select version B…');
-
-        if (state.compareImageSelect) {
-            state.compareImageSelect.disabled = true;
-        }
-        if (state.compareBaseSelect) {
-            state.compareBaseSelect.disabled = true;
-        }
-        if (state.compareTargetSelect) {
-            state.compareTargetSelect.disabled = true;
-        }
-    }
-
-    function updateCompareVersionOptions(state) {
-        const { compareProductSelect, compareImageSelect, compareBaseSelect, compareTargetSelect, compareSelections } = state;
-        if (!compareBaseSelect || !compareTargetSelect) {
-            return [];
-        }
-
-        resetSelectOptions(compareBaseSelect, 'Select version A…');
-        resetSelectOptions(compareTargetSelect, 'Select version B…');
-        compareBaseSelect.disabled = true;
-        compareTargetSelect.disabled = true;
-
-        const product = compareProductSelect?.value || '';
-        const image = compareImageSelect?.value || '';
-
-        if (!product || !image) {
-            compareSelections.baseVersion = '';
-            compareSelections.targetVersion = '';
-            return [];
-        }
-
-        const versions = getVersionsForImage(state.data.images, product, image);
-        versions.forEach(version => {
-            compareBaseSelect.appendChild(createElementWithAttrs('option', version, { value: version }));
-            compareTargetSelect.appendChild(createElementWithAttrs('option', version, { value: version }));
-        });
-
-        if (versions.length) {
-            compareBaseSelect.disabled = false;
-            compareTargetSelect.disabled = false;
-        }
-
-        if (versions.includes(compareSelections.baseVersion)) {
-            compareBaseSelect.value = compareSelections.baseVersion;
-        } else {
-            compareSelections.baseVersion = '';
-        }
-
-        if (versions.includes(compareSelections.targetVersion)) {
-            compareTargetSelect.value = compareSelections.targetVersion;
-        } else {
-            compareSelections.targetVersion = '';
-        }
-
-        if (compareBaseSelect.value && compareBaseSelect.value === compareTargetSelect.value) {
-            compareTargetSelect.value = '';
-            compareSelections.targetVersion = '';
-        }
-
-        return versions;
-    }
-
-    function updateCompareImageOptions(state) {
-        const { compareProductSelect, compareImageSelect, compareSelections } = state;
-        if (!compareImageSelect) {
-            return [];
-        }
-
-        const product = compareProductSelect?.value || '';
-        const placeholder = product ? 'Select an image…' : 'Select a product first…';
-        resetSelectOptions(compareImageSelect, placeholder);
-        compareImageSelect.disabled = true;
-
-        if (!product) {
-            compareSelections.image = '';
-            updateCompareVersionOptions(state);
-            return [];
-        }
-
-        const imageNames = getImageNamesByProduct(state.data.images, product);
-        imageNames.forEach(name => {
-            compareImageSelect.appendChild(createElementWithAttrs('option', name, { value: name }));
-        });
-
-        if (imageNames.length) {
-            compareImageSelect.disabled = false;
-        }
-
-        if (imageNames.includes(compareSelections.image)) {
-            compareImageSelect.value = compareSelections.image;
-        } else {
-            compareSelections.image = '';
-        }
-
-        return updateCompareVersionOptions(state);
-    }
-
-    function syncCompareSelectors(state) {
-        if (!state || !state.compareProductSelect) {
-            return;
-        }
-
-        state.compareSelections.product = state.compareProductSelect.value || '';
-        if (!state.compareSelections.product) {
-            resetCompareSelections(state, { preserveProduct: true });
-            updateCompareVersionOptions(state);
-            return;
-        }
-
-        updateCompareImageOptions(state);
-    }
-
-    function resetComparisonResults(state, message = 'Run a comparison to see results.', options = {}) {
-        if (!state) {
-            return;
-        }
-
-        const { keepVisible = false } = options;
-
-        if (state.compareResultsRows) {
-            state.compareResultsRows.innerHTML = `<tr><td colspan="7" class="empty">${message}</td></tr>`;
-        }
-        if (state.compareResultsContainer) {
-            state.compareResultsContainer.hidden = !keepVisible;
-        }
-        if (state.compareResultsSearch) {
-            state.compareResultsSearch.value = '';
-        }
-        if (state.compareResultsMeta) {
-            state.compareResultsMeta.textContent = '';
-        }
-        if (state.compareResultsTitle) {
-            state.compareResultsTitle.textContent = 'Comparison Results';
-        }
-        if (state.compareSummary) {
-            state.compareSummary.innerHTML = '';
-            state.compareSummary.hidden = true;
-        }
-        state.currentComparison = [];
-        state.compareStats = {};
-        state.compareActiveFilter = null;
-    }
-
-    function resetDeleteSelections(state) {
-        if (!state) {
-            return;
-        }
-
-        state.deleteSelections = state.deleteSelections || { product: '', image: '', version: '' };
-
-        if (state.deleteProductSelect) {
-            state.deleteProductSelect.value = state.deleteSelections.product || '';
-        }
-
-        resetSelectOptions(
-            state.deleteImageSelect,
-            state.deleteSelections.product ? 'Select an image…' : 'Select a product first…'
-        );
-        resetSelectOptions(state.deleteVersionSelect, 'All versions');
-
-        if (state.deleteImageSelect) {
-            state.deleteImageSelect.disabled = true;
-        }
-        if (state.deleteVersionSelect) {
-            state.deleteVersionSelect.disabled = true;
-        }
-    }
-
-    function updateDeleteImageOptions(state) {
-        const { deleteProductSelect, deleteImageSelect, deleteVersionSelect, deleteSelections } = state;
-        if (!deleteImageSelect) {
-            return;
-        }
-
-        const product = deleteProductSelect?.value || '';
-        const placeholder = product ? 'Select an image…' : 'Select a product first…';
-        resetSelectOptions(deleteImageSelect, placeholder);
-        resetSelectOptions(deleteVersionSelect, 'All versions');
-        deleteImageSelect.disabled = true;
-        deleteVersionSelect.disabled = true;
-
-        if (!product) {
-            deleteSelections.product = '';
-            deleteSelections.image = '';
-            deleteSelections.version = '';
-            return;
-        }
-
-        const imageNames = getImageNamesByProduct(state.data.images, product);
-        imageNames.forEach(name => {
-            deleteImageSelect.appendChild(createElementWithAttrs('option', name, { value: name }));
-        });
-
-        if (imageNames.length) {
-            deleteImageSelect.disabled = false;
-        }
-
-        if (imageNames.includes(deleteSelections.image)) {
-            deleteImageSelect.value = deleteSelections.image;
-        } else {
-            deleteSelections.image = '';
-        }
-
-        updateDeleteVersionOptions(state);
-    }
-
-    function updateDeleteVersionOptions(state) {
-        const { deleteProductSelect, deleteImageSelect, deleteVersionSelect, deleteSelections } = state;
-        if (!deleteVersionSelect) {
-            return;
-        }
-
-        const product = deleteProductSelect?.value || '';
-        const image = deleteImageSelect?.value || '';
-        resetSelectOptions(deleteVersionSelect, 'All versions');
-        deleteVersionSelect.disabled = true;
-
-        if (!product || !image) {
-            deleteSelections.version = '';
-            return;
-        }
-
-        const versions = getVersionsForImage(state.data.images, product, image);
-        versions.forEach(version => {
-            deleteVersionSelect.appendChild(createElementWithAttrs('option', version, { value: version }));
-        });
-
-        if (versions.length) {
-            deleteVersionSelect.disabled = false;
-        }
-
-        if (versions.includes(deleteSelections.version)) {
-            deleteVersionSelect.value = deleteSelections.version;
-        } else {
-            deleteSelections.version = '';
-            deleteVersionSelect.value = '';
-        }
-    }
-
-    function syncDeleteSelectors(state) {
-        if (!state || !state.deleteProductSelect) {
-            return;
-        }
-        state.deleteSelections.product = state.deleteProductSelect.value || state.deleteSelections.product || '';
-        updateDeleteImageOptions(state);
-    }
-
-    function renderComparisonRows(state, items, emptyMessage = 'No vulnerabilities found for this comparison.') {
-        if (!state || !state.compareResultsRows) {
-            return;
-        }
-
-        const target = state.compareResultsRows;
-
-        if (!Array.isArray(items) || !items.length) {
-            target.innerHTML = `<tr><td colspan="7" class="empty">${emptyMessage}</td></tr>`;
-            return;
-        }
-
-        target.innerHTML = '';
-        items.forEach(item => {
-            const row = document.createElement('tr');
-            row.appendChild(createElementWithAttrs('td', item?.cve_id || '—'));
-            row.appendChild(createElementWithAttrs('td', item?.component_type || '—'));
-            row.appendChild(createElementWithAttrs('td', item?.component || '—'));
-            row.appendChild(createElementWithAttrs('td', item?.component_path || '—'));
-
-            const comparisonKey = item?.comparison;
-            const presenceCell = document.createElement('td');
-            const badgeClass = COMPARISON_BADGE_CLASSES[comparisonKey] || 'badge';
-            const label = getComparisonLabel(state, comparisonKey);
-            presenceCell.innerHTML = `<span class="${badgeClass}">${label}</span>`;
-            row.appendChild(presenceCell);
-
-            const severityCell = document.createElement('td');
-            const severityLevel = item?.base_severity || '';
-            const severityBadge = document.createElement('span');
-            severityBadge.className = `severity-badge ${getSeverityBadgeClass(severityLevel)}`;
-            severityBadge.textContent = severityLevel || '—';
-            severityCell.appendChild(severityBadge);
-            row.appendChild(severityCell);
-            const score = item?.base_score;
-            const cvssVersion = item?.cvss_version ? `v${item.cvss_version}` : '';
-            const scoreText = score === undefined || score === null ? '—' : String(score);
-            const scoreWithVersion = scoreText === '—' ? '—' : `${scoreText}${cvssVersion ? ` (${cvssVersion})` : ''}`;
-            row.appendChild(createElementWithAttrs('td', scoreWithVersion));
-
-            target.appendChild(row);
-        });
-    }
-
-    function updateComparisonStats(state, stats = {}) {
-        if (!state || !state.compareSummary) {
-            return;
-        }
-
-        const summary = state.compareSummary;
-        state.compareStats = stats || {};
-        const entries = [
-            {
-                key: 'shared',
-                count: stats.shared ?? 0,
-                className: COMPARISON_BADGE_CLASSES.shared || 'badge'
-            },
-            {
-                key: 'only_version_a',
-                count: stats.only_version_a ?? 0,
-                className: COMPARISON_BADGE_CLASSES.only_version_a || 'badge'
-            },
-            {
-                key: 'only_version_b',
-                count: stats.only_version_b ?? 0,
-                className: COMPARISON_BADGE_CLASSES.only_version_b || 'badge'
-            }
-        ];
-
-        const activeKey = state.compareActiveFilter;
-        const hasActiveData = entries.some(entry => entry.key === activeKey && entry.count > 0);
-        if (activeKey && !hasActiveData) {
-            state.compareActiveFilter = null;
-        }
-
-        const hasData = entries.some(entry => entry.count > 0);
-        summary.innerHTML = '';
-        if (!hasData) {
-            summary.hidden = true;
-            return;
-        }
-
-        summary.hidden = false;
-
-        entries.forEach(({ key, count, className }) => {
-            const isActive = state.compareActiveFilter === key;
-            const button = createElementWithAttrs('button', '', {
-                type: 'button',
-                class: `compare-filter${isActive ? ' compare-filter--active' : ''}`,
-                'data-compare-filter': key
-            });
-            button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
-            const labelText = getComparisonLabel(state, key);
-            button.setAttribute('aria-label', `${labelText} (${count})`);
-            if (!count) {
-                button.disabled = true;
-                button.setAttribute('aria-disabled', 'true');
-            } else {
-                button.setAttribute('aria-disabled', 'false');
-            }
-
-            const labelSpan = createElementWithAttrs(
-                'span',
-                labelText,
-                { class: `${className} compare-filter__label` }
-            );
-            const countSpan = createElementWithAttrs('span', `(${count})`, { class: 'compare-filter__count' });
-
-            button.appendChild(labelSpan);
-            button.appendChild(countSpan);
-            summary.appendChild(button);
-        });
-    }
-
-    function applyComparisonSearch(state) {
-        if (!state) {
-            return;
-        }
-        const source = Array.isArray(state.currentComparison) ? state.currentComparison : [];
-        const filterKey = state.compareActiveFilter;
-        let filteredByKey = filterKey
-            ? source.filter(item => item?.comparison === filterKey)
-            : source;
-        const searchInput = state.compareResultsSearch;
-        if (!searchInput) {
-            renderComparisonRows(state, filteredByKey);
-            return;
-        }
-
-        const term = searchInput.value?.trim().toLowerCase();
-        if (!term) {
-            const emptyMessage = filterKey && source.length
-                ? 'No comparison entries in this category.'
-                : 'No vulnerabilities found for this comparison.';
-            renderComparisonRows(state, filteredByKey, emptyMessage);
-            return;
-        }
-
-        const searched = filteredByKey.filter(item => {
-            const values = [
-                item?.cve_id,
-                item?.component,
-                item?.component_type,
-                item?.component_path,
-                item?.comparison,
-                item?.base_severity,
-                item?.base_score,
-                item?.cvss_version
-            ];
-
-            return values.some(value => {
-                if (value === undefined || value === null) {
-                    return false;
-                }
-                return String(value).toLowerCase().includes(term);
-            });
-        });
-
-        renderComparisonRows(state, searched, 'No comparison entries match this search.');
-    }
-
-    function renderImageRows(state, filteredImages, filterValue) {
-        const { rowsBody, counter } = state;
-        if (!rowsBody || !counter) {
-            return;
-        }
-
-        if (!Array.isArray(filteredImages) || !filteredImages.length) {
-            const message = filterValue ? 'No images match this product.' : 'No images yet.';
-            rowsBody.innerHTML = '';
-            const row = document.createElement('tr');
-            const cell = createElementWithAttrs('td', message, { colspan: '4', class: 'empty' });
-            row.appendChild(cell);
-            rowsBody.appendChild(row);
-            counter.textContent = '0';
-            return;
-        }
-
-        rowsBody.innerHTML = '';
-        filteredImages.forEach(image => {
-            const name = image.name ?? image[0] ?? '—';
-            const version = image.version ?? image[1] ?? '—';
-            const productId = image.product ?? image[2] ?? '—';
-            const teamId = image.team ?? image.team_id ?? image[3] ?? '';
-
-            const row = document.createElement('tr');
-            row.appendChild(createElementWithAttrs('td', name));
-            row.appendChild(createElementWithAttrs('td', version));
-            row.appendChild(createElementWithAttrs('td', productId));
-            const actionCell = document.createElement('td');
-            const detailsButton = createElementWithAttrs('button', 'View details', {
-                type: 'button',
-                class: 'btn link',
-                'data-image-action': 'details',
-                'data-image-name': name,
-                'data-image-version': version,
-                'data-image-product': productId,
-                'data-image-team': teamId
-            });
-            actionCell.appendChild(detailsButton);
-            row.appendChild(actionCell);
-            rowsBody.appendChild(row);
-        });
-
-        counter.textContent = filteredImages.length;
-    }
-
-    function renderImagesPage() {
-        const root = document.getElementById('vmaContent');
-        if (!root) {
-            return null;
-        }
-
-        setActiveRoute?.('images');
-        setPageTitle?.('Images');
-        clearElement(root);
-
-        const wrapper = createElementWithAttrs('section', '', { class: 'images-page' });
-
-        const toolbar = createElementWithAttrs('div', '', { class: 'toolbar page-section' });
-        const toolbarTitle = createElementWithAttrs('h2', 'Images');
-        const toolbarActions = createElementWithAttrs('div', '', { class: 'toolbar-actions' });
-        const toggleFormButton = createElementWithAttrs('button', '', {
-            type: 'button',
-            class: 'btn primary',
-            'data-image-form-toggle': ''
-        });
-        toggleFormButton.innerHTML = '<i class="fas fa-plus"></i> Create Image';
-        const toggleDeleteButton = createElementWithAttrs('button', '', {
-            type: 'button',
-            class: 'btn danger',
-            'data-image-delete-toggle': ''
-        });
-        toggleDeleteButton.innerHTML = '<i class="fas fa-trash"></i> Delete Images';
-        const toggleCompareButton = createElementWithAttrs('button', '', {
-            type: 'button',
-            class: 'btn secondary',
-            'data-image-compare-toggle': ''
-        });
-        toggleCompareButton.innerHTML = '<i class="fas fa-code-compare"></i> Compare Images';
-        toolbarActions.appendChild(toggleFormButton);
-        toolbarActions.appendChild(toggleDeleteButton);
-        toolbarActions.appendChild(toggleCompareButton);
-        toolbar.appendChild(toolbarTitle);
-        toolbar.appendChild(toolbarActions);
-
-        const formCard = createElementWithAttrs('div', '', {
-            class: 'form-card page-section hidden-form',
-            'data-image-form-card': ''
-        });
-        formCard.innerHTML = `
+    setActiveRoute?.('images');
+    setPageTitle?.('Images');
+    clearElement(root);
+
+    const wrapper = createElementWithAttrs('section', '', { class: 'images-page' });
+
+    const toolbar = createElementWithAttrs('div', '', { class: 'toolbar page-section' });
+    const toolbarTitle = createElementWithAttrs('h2', 'Images');
+    const toolbarActions = createElementWithAttrs('div', '', { class: 'toolbar-actions' });
+    const toggleFormButton = createElementWithAttrs('button', '', {
+      type: 'button',
+      class: 'btn primary',
+      'data-image-form-toggle': ''
+    });
+    toggleFormButton.innerHTML = '<i class="fas fa-plus"></i> Create Image';
+    const toggleDeleteButton = createElementWithAttrs('button', '', {
+      type: 'button',
+      class: 'btn danger',
+      'data-image-delete-toggle': ''
+    });
+    toggleDeleteButton.innerHTML = '<i class="fas fa-trash"></i> Delete Images';
+    const toggleCompareButton = createElementWithAttrs('button', '', {
+      type: 'button',
+      class: 'btn secondary',
+      'data-image-compare-toggle': ''
+    });
+    toggleCompareButton.innerHTML = '<i class="fas fa-code-compare"></i> Compare Images';
+    toolbarActions.appendChild(toggleFormButton);
+    toolbarActions.appendChild(toggleDeleteButton);
+    toolbarActions.appendChild(toggleCompareButton);
+    toolbar.appendChild(toolbarTitle);
+    toolbar.appendChild(toolbarActions);
+
+    const formCard = createElementWithAttrs('div', '', {
+      class: 'form-card page-section hidden-form',
+      'data-image-form-card': ''
+    });
+    formCard.innerHTML = `
             <h3>Create Image</h3>
             <form data-image-form>
                 <div class="form-group">
@@ -907,11 +1154,11 @@
             <div class="inline-message" data-image-form-feedback hidden></div>
         `;
 
-        const deleteCard = createElementWithAttrs('div', '', {
-            class: 'form-card page-section hidden-form',
-            'data-image-delete-card': ''
-        });
-        deleteCard.innerHTML = `
+    const deleteCard = createElementWithAttrs('div', '', {
+      class: 'form-card page-section hidden-form',
+      'data-image-delete-card': ''
+    });
+    deleteCard.innerHTML = `
             <h3>Delete Images</h3>
             <form class="compare-form" data-image-delete-form>
                 <div class="form-group">
@@ -944,11 +1191,11 @@
             <div class="inline-message" data-image-delete-feedback hidden></div>
         `;
 
-        const compareCard = createElementWithAttrs('div', '', {
-            class: 'form-card page-section hidden-form',
-            'data-image-compare-card': ''
-        });
-        compareCard.innerHTML = `
+    const compareCard = createElementWithAttrs('div', '', {
+      class: 'form-card page-section hidden-form',
+      'data-image-compare-card': ''
+    });
+    compareCard.innerHTML = `
             <h3>Compare Images</h3>
             <form class="compare-form" data-image-compare-form>
                 <div class="form-group">
@@ -992,6 +1239,12 @@
                         <p class="table-subtitle" data-image-compare-meta></p>
                     </div>
                     <div class="table-header__actions">
+                        <div class="column-toggle-wrapper">
+                            <button type="button" class="btn secondary" data-compare-column-toggle-btn>
+                                <i class="fas fa-table-columns"></i> Columns
+                            </button>
+                            <div class="column-toggle-dropdown" data-compare-column-toggle-dropdown></div>
+                        </div>
                         <label class="sr-only" for="image-compare-search">Search comparison</label>
                         <input
                             type="search"
@@ -1004,17 +1257,7 @@
                 </div>
                 <div class="compare-summary" data-image-compare-summary hidden></div>
                 <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>CVE</th>
-                            <th>Type</th>
-                            <th>Package</th>
-                            <th>Path</th>
-                            <th>Presence</th>
-                            <th>Severity</th>
-                            <th>Score</th>
-                        </tr>
-                    </thead>
+                    <thead data-image-compare-thead><tr></tr></thead>
                     <tbody data-image-compare-rows>
                         <tr><td colspan="7" class="empty">Run a comparison to see results.</td></tr>
                     </tbody>
@@ -1022,8 +1265,8 @@
             </div>
         `;
 
-        const listCard = createElementWithAttrs('div', '', { class: 'table-card page-section' });
-        listCard.innerHTML = `
+    const listCard = createElementWithAttrs('div', '', { class: 'table-card page-section' });
+    listCard.innerHTML = `
             <div class="table-header">
                 <h2>Images</h2>
                 <div class="inline-filter">
@@ -1036,26 +1279,19 @@
             </div>
             <div class="inline-message" data-image-list-feedback hidden></div>
             <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Version</th>
-                        <th>Product</th>
-                        <th></th>
-                    </tr>
-                </thead>
+                <thead data-image-list-thead><tr></tr></thead>
                 <tbody data-image-rows>
                     <tr><td colspan="4" class="empty">Loading…</td></tr>
                 </tbody>
             </table>
         `;
 
-        const detailCard = createElementWithAttrs('div', '', {
-            class: 'table-card page-section',
-            hidden: true,
-            'data-image-detail-card': ''
-        });
-        detailCard.innerHTML = `
+    const detailCard = createElementWithAttrs('div', '', {
+      class: 'table-card page-section',
+      hidden: true,
+      'data-image-detail-card': ''
+    });
+    detailCard.innerHTML = `
             <div class="table-header table-header--stacked">
                 <div>
                     <h2 data-image-detail-title>Image Vulnerabilities</h2>
@@ -1086,983 +1322,1045 @@
             <table class="data-table">
                 <thead data-image-detail-thead><tr></tr></thead>
                 <tbody data-image-detail-rows>
-                    <tr><td colspan="${getVisibleColumns({columnVisibility: getDefaultVisibility()}).length}" class="empty">Select an image to view vulnerabilities.</td></tr>
+                    <tr><td colspan="${getVisibleColumns({ columnVisibility: getDefaultVisibility() }).length}" class="empty">Select an image to view vulnerabilities.</td></tr>
                 </tbody>
             </table>
         `;
 
-        wrapper.appendChild(toolbar);
-        wrapper.appendChild(formCard);
-        wrapper.appendChild(deleteCard);
-        wrapper.appendChild(compareCard);
-        wrapper.appendChild(listCard);
-        wrapper.appendChild(detailCard);
-        root.appendChild(wrapper);
+    wrapper.appendChild(toolbar);
+    wrapper.appendChild(formCard);
+    wrapper.appendChild(deleteCard);
+    wrapper.appendChild(compareCard);
+    wrapper.appendChild(listCard);
+    wrapper.appendChild(detailCard);
+    root.appendChild(wrapper);
 
-        return {
-            toggleFormButton,
-            toggleDeleteButton,
-            toggleCompareButton,
-            formCard,
-            deleteCard,
-            compareCard,
-            listCard,
-            detailCard,
-            form: formCard.querySelector('[data-image-form]'),
-            teamSelect: formCard.querySelector('#image-team'),
-            formFeedback: formCard.querySelector('[data-image-form-feedback]'),
-            productSelect: formCard.querySelector('#image-product'),
-            listFeedback: listCard.querySelector('[data-image-list-feedback]'),
-            filterSelect: listCard.querySelector('[data-image-filter]'),
-            rowsBody: listCard.querySelector('[data-image-rows]'),
-            counter: listCard.querySelector('[data-image-count]'),
-            detailFeedback: detailCard.querySelector('[data-image-detail-feedback]'),
-            detailRows: detailCard.querySelector('[data-image-detail-rows]'),
-            detailTitle: detailCard.querySelector('[data-image-detail-title]'),
-            detailMeta: detailCard.querySelector('[data-image-detail-meta]'),
-            detailSearchInput: detailCard.querySelector('[data-image-detail-search]'),
-            detailBackButton: detailCard.querySelector('[data-image-back]'),
-            detailThead: detailCard.querySelector('[data-image-detail-thead]'),
-            columnToggleBtn: detailCard.querySelector('[data-column-toggle-btn]'),
-            columnToggleDropdown: detailCard.querySelector('[data-column-toggle-dropdown]'),
-            columnVisibility: loadColumnVisibility() || getDefaultVisibility(),
-            deleteForm: deleteCard.querySelector('[data-image-delete-form]'),
-            deleteFeedback: deleteCard.querySelector('[data-image-delete-feedback]'),
-            deleteProductSelect: deleteCard.querySelector('#image-delete-product'),
-            deleteImageSelect: deleteCard.querySelector('#image-delete-name'),
-            deleteVersionSelect: deleteCard.querySelector('#image-delete-version'),
-            compareForm: compareCard.querySelector('[data-image-compare-form]'),
-            compareFeedback: compareCard.querySelector('[data-image-compare-feedback]'),
-            compareProductSelect: compareCard.querySelector('#image-compare-product'),
-            compareImageSelect: compareCard.querySelector('#image-compare-name'),
-            compareBaseSelect: compareCard.querySelector('#image-compare-base'),
-            compareTargetSelect: compareCard.querySelector('#image-compare-target'),
-            compareResultsContainer: compareCard.querySelector('[data-image-compare-results]'),
-            compareResultsRows: compareCard.querySelector('[data-image-compare-rows]'),
-            compareResultsSearch: compareCard.querySelector('[data-image-compare-search]'),
-            compareResultsTitle: compareCard.querySelector('[data-image-compare-title]'),
-            compareResultsMeta: compareCard.querySelector('[data-image-compare-meta]'),
-            compareSummary: compareCard.querySelector('[data-image-compare-summary]'),
-            data: {
-                images: [],
-                products: []
-            },
-            view: 'list',
-            currentVulns: [],
-            compareSelections: {
-                product: '',
-                image: '',
-                baseVersion: '',
-                targetVersion: ''
-            },
-            deleteSelections: {
-                product: '',
-                image: '',
-                version: ''
-            },
-            currentComparison: [],
-            compareStats: {},
-            compareActiveFilter: null,
-            previousView: 'list'
-        };
+    return {
+      toggleFormButton,
+      toggleDeleteButton,
+      toggleCompareButton,
+      formCard,
+      deleteCard,
+      compareCard,
+      listCard,
+      detailCard,
+      form: formCard.querySelector('[data-image-form]'),
+      teamSelect: formCard.querySelector('#image-team'),
+      formFeedback: formCard.querySelector('[data-image-form-feedback]'),
+      productSelect: formCard.querySelector('#image-product'),
+      listFeedback: listCard.querySelector('[data-image-list-feedback]'),
+      filterSelect: listCard.querySelector('[data-image-filter]'),
+      rowsBody: listCard.querySelector('[data-image-rows]'),
+      counter: listCard.querySelector('[data-image-count]'),
+      listThead: listCard.querySelector('[data-image-list-thead]'),
+      detailFeedback: detailCard.querySelector('[data-image-detail-feedback]'),
+      detailRows: detailCard.querySelector('[data-image-detail-rows]'),
+      detailTitle: detailCard.querySelector('[data-image-detail-title]'),
+      detailMeta: detailCard.querySelector('[data-image-detail-meta]'),
+      detailSearchInput: detailCard.querySelector('[data-image-detail-search]'),
+      detailBackButton: detailCard.querySelector('[data-image-back]'),
+      detailThead: detailCard.querySelector('[data-image-detail-thead]'),
+      columnToggleBtn: detailCard.querySelector('[data-column-toggle-btn]'),
+      columnToggleDropdown: detailCard.querySelector('[data-column-toggle-dropdown]'),
+      columnVisibility: loadColumnVisibility() || getDefaultVisibility(),
+      deleteForm: deleteCard.querySelector('[data-image-delete-form]'),
+      deleteFeedback: deleteCard.querySelector('[data-image-delete-feedback]'),
+      deleteProductSelect: deleteCard.querySelector('#image-delete-product'),
+      deleteImageSelect: deleteCard.querySelector('#image-delete-name'),
+      deleteVersionSelect: deleteCard.querySelector('#image-delete-version'),
+      compareForm: compareCard.querySelector('[data-image-compare-form]'),
+      compareFeedback: compareCard.querySelector('[data-image-compare-feedback]'),
+      compareProductSelect: compareCard.querySelector('#image-compare-product'),
+      compareImageSelect: compareCard.querySelector('#image-compare-name'),
+      compareBaseSelect: compareCard.querySelector('#image-compare-base'),
+      compareTargetSelect: compareCard.querySelector('#image-compare-target'),
+      compareResultsContainer: compareCard.querySelector('[data-image-compare-results]'),
+      compareResultsRows: compareCard.querySelector('[data-image-compare-rows]'),
+      compareResultsSearch: compareCard.querySelector('[data-image-compare-search]'),
+      compareResultsTitle: compareCard.querySelector('[data-image-compare-title]'),
+      compareResultsMeta: compareCard.querySelector('[data-image-compare-meta]'),
+      compareSummary: compareCard.querySelector('[data-image-compare-summary]'),
+      compareResultsThead: compareCard.querySelector('[data-image-compare-thead]'),
+      compareColumnToggleBtn: compareCard.querySelector('[data-compare-column-toggle-btn]'),
+      compareColumnToggleDropdown: compareCard.querySelector('[data-compare-column-toggle-dropdown]'),
+      comparisonColumnVisibility: loadComparisonColumnVisibility() || getDefaultComparisonVisibility(),
+      data: {
+        images: [],
+        products: []
+      },
+      view: 'list',
+      currentVulns: [],
+      compareSelections: {
+        product: '',
+        image: '',
+        baseVersion: '',
+        targetVersion: ''
+      },
+      deleteSelections: {
+        product: '',
+        image: '',
+        version: ''
+      },
+      currentComparison: [],
+      compareStats: {},
+      compareActiveFilter: null,
+      previousView: 'list',
+      listSort: loadSortState('list') || { key: 'name', direction: 'asc' },
+      detailSort: loadSortState('detail') || { key: 'severity', direction: 'desc' },
+      comparisonSort: loadSortState('comparison') || { key: 'severity', direction: 'desc' }
+    };
+  }
+
+  async function loadData(state, helpers) {
+    if (!state.rowsBody) {
+      return;
     }
 
-    async function loadData(state, helpers) {
-        if (!state.rowsBody) {
-            return;
-        }
+    state.rowsBody.innerHTML = '';
+    const loadingRow = document.createElement('tr');
+    loadingRow.appendChild(createElementWithAttrs('td', 'Loading…', { colspan: '4', class: 'empty' }));
+    state.rowsBody.appendChild(loadingRow);
+    helpers.list?.hide();
+    helpers.delete?.hide();
 
-        state.rowsBody.innerHTML = '';
-        const loadingRow = document.createElement('tr');
-        loadingRow.appendChild(createElementWithAttrs('td', 'Loading…', { colspan: '4', class: 'empty' }));
-        state.rowsBody.appendChild(loadingRow);
-        helpers.list?.hide();
-        helpers.delete?.hide();
+    try {
+      const [imagesPayload, productsPayload] = await Promise.all([
+        fetchJSON(apiUrl('/images')),
+        fetchJSON(apiUrl('/products'))
+      ]);
 
-        try {
-            const [imagesPayload, productsPayload] = await Promise.all([
-                fetchJSON(apiUrl('/images')),
-                fetchJSON(apiUrl('/products'))
-            ]);
+      state.data.images = normalizeApiResponse(imagesPayload).map(parseImageRecord);
+      state.data.products = normalizeApiResponse(productsPayload);
+    } catch (error) {
+      state.rowsBody.innerHTML = '';
+      const row = document.createElement('tr');
+      row.appendChild(
+        createElementWithAttrs('td', 'Unable to load images.', { colspan: '4', class: 'empty' })
+      );
+      state.rowsBody.appendChild(row);
+      state.counter.textContent = '0';
+      helpers.list?.show(error.message || 'Failed to fetch images.', 'error');
+    }
 
-            state.data.images = normalizeApiResponse(imagesPayload).map(parseImageRecord);
-            state.data.products = normalizeApiResponse(productsPayload);
-        } catch (error) {
-            state.rowsBody.innerHTML = '';
-            const row = document.createElement('tr');
-            row.appendChild(
-                createElementWithAttrs('td', 'Unable to load images.', { colspan: '4', class: 'empty' })
-            );
-            state.rowsBody.appendChild(row);
-            state.counter.textContent = '0';
-            helpers.list?.show(error.message || 'Failed to fetch images.', 'error');
-        }
+    state.data.images = Array.isArray(state.data.images) ? state.data.images : [];
+    state.data.products = Array.isArray(state.data.products) ? state.data.products : [];
 
-        state.data.images = Array.isArray(state.data.images) ? state.data.images : [];
-        state.data.products = Array.isArray(state.data.products) ? state.data.products : [];
+    populateImageTeamOptions(state);
+    updateImageProductOptions(state);
+    updateSelectOptions(state.filterSelect, state.data.products, 'All products');
+    updateSelectOptions(state.compareProductSelect, state.data.products, 'Select a product…');
+    updateSelectOptions(state.deleteProductSelect, state.data.products, 'Select a product…');
+    state.compareSelections.product = state.compareProductSelect?.value || state.compareSelections.product || '';
+    state.deleteSelections.product = state.deleteProductSelect?.value || state.deleteSelections.product || '';
 
-        populateImageTeamOptions(state);
-        updateImageProductOptions(state);
-        updateSelectOptions(state.filterSelect, state.data.products, 'All products');
-        updateSelectOptions(state.compareProductSelect, state.data.products, 'Select a product…');
-        updateSelectOptions(state.deleteProductSelect, state.data.products, 'Select a product…');
-        state.compareSelections.product = state.compareProductSelect?.value || state.compareSelections.product || '';
-        state.deleteSelections.product = state.deleteProductSelect?.value || state.deleteSelections.product || '';
+    const hasProducts = Boolean(state.data.products.length);
+    const formElements = state.form ? Array.from(state.form.elements) : [];
+    formElements.forEach(element => {
+      if (element.tagName === 'BUTTON') {
+        element.disabled = !hasProducts && element.type !== 'reset';
+      } else if (element.tagName === 'SELECT' || element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
+        element.disabled = !hasProducts;
+      }
+    });
 
-        const hasProducts = Boolean(state.data.products.length);
-        const formElements = state.form ? Array.from(state.form.elements) : [];
-        formElements.forEach(element => {
-            if (element.tagName === 'BUTTON') {
-                element.disabled = !hasProducts && element.type !== 'reset';
-            } else if (element.tagName === 'SELECT' || element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
-                element.disabled = !hasProducts;
-            }
+    const compareElements = state.compareForm ? Array.from(state.compareForm.elements) : [];
+    compareElements.forEach(element => {
+      if (element.tagName === 'BUTTON') {
+        element.disabled = !hasProducts && element.type !== 'reset';
+      } else if (element.tagName === 'SELECT') {
+        element.disabled = !hasProducts;
+      }
+    });
+
+    const deleteElements = state.deleteForm ? Array.from(state.deleteForm.elements) : [];
+    deleteElements.forEach(element => {
+      if (element.tagName === 'BUTTON') {
+        element.disabled = !hasProducts && element.type !== 'reset';
+      } else if (element.tagName === 'SELECT') {
+        element.disabled = !hasProducts;
+      }
+    });
+
+    if (state.toggleDeleteButton) {
+      state.toggleDeleteButton.disabled = !hasProducts;
+    }
+
+    if (!hasProducts) {
+      helpers.form.show('Create a product before registering images.', 'info');
+      helpers.compare?.show('Create a product before comparing images.', 'info');
+      helpers.delete?.show('Create a product before deleting images.', 'info');
+      resetCompareSelections(state);
+      resetComparisonResults(state);
+      resetDeleteSelections(state);
+    } else {
+      helpers.form.hide();
+      helpers.compare?.hide();
+      helpers.delete?.hide();
+      syncCompareSelectors(state);
+      syncDeleteSelectors(state);
+      if (!state.compareCard?.classList.contains('show')) {
+        resetComparisonResults(state);
+      }
+    }
+
+    const filterValue = state.filterSelect?.value || '';
+    const filtered = filterValue
+      ? state.data.images.filter(image => (image.product ?? image[2]) === filterValue)
+      : state.data.images;
+    renderImageRows(state, filtered, filterValue);
+  }
+
+  function handleForm(state, helpers) {
+    if (!state.form) {
+      return;
+    }
+
+    state.form.addEventListener('submit', async event => {
+      event.preventDefault();
+      helpers.form.hide();
+
+      const formData = new FormData(state.form);
+      const payload = {
+        name: formData.get('name')?.trim(),
+        version: formData.get('version')?.trim(),
+        product: formData.get('product')?.trim(),
+        team: formData.get('team')?.trim()
+      };
+
+      if (!payload.name || !payload.version || !payload.product || !payload.team) {
+        helpers.form.show('All fields are required to register an image.', 'error');
+        return;
+      }
+
+      try {
+        const response = await fetchJSON(apiUrl('/image'), {
+          method: 'POST',
+          body: JSON.stringify(payload)
         });
 
-            const compareElements = state.compareForm ? Array.from(state.compareForm.elements) : [];
-            compareElements.forEach(element => {
-                if (element.tagName === 'BUTTON') {
-                    element.disabled = !hasProducts && element.type !== 'reset';
-                } else if (element.tagName === 'SELECT') {
-                    element.disabled = !hasProducts;
-                }
-            });
+        if (!response || response.status === false) {
+          throw new Error('The image could not be saved.');
+        }
 
-            const deleteElements = state.deleteForm ? Array.from(state.deleteForm.elements) : [];
-            deleteElements.forEach(element => {
-                if (element.tagName === 'BUTTON') {
-                    element.disabled = !hasProducts && element.type !== 'reset';
-                } else if (element.tagName === 'SELECT') {
-                    element.disabled = !hasProducts;
-                }
-            });
+        state.setFormVisible?.(false);
+        helpers.form.show('Image saved successfully.', 'success');
+        loadData(state, helpers);
+      } catch (error) {
+        helpers.form.show(error.message || 'Failed to save image.', 'error');
+      }
+    });
 
-            if (state.toggleDeleteButton) {
-                state.toggleDeleteButton.disabled = !hasProducts;
-            }
+    state.form.addEventListener('reset', () => {
+      helpers.form.hide();
+      if (state.teamSelect) {
+        state.teamSelect.value = '';
+      }
+      updateImageProductOptions(state);
+    });
+  }
 
-        if (!hasProducts) {
-            helpers.form.show('Create a product before registering images.', 'info');
-            helpers.compare?.show('Create a product before comparing images.', 'info');
-            helpers.delete?.show('Create a product before deleting images.', 'info');
-            resetCompareSelections(state);
-            resetComparisonResults(state);
-            resetDeleteSelections(state);
+  function handleImageFormTeamSelection(state, helpers) {
+    if (!state.teamSelect) {
+      return;
+    }
+    state.teamSelect.addEventListener('change', () => {
+      updateImageProductOptions(state);
+      helpers.form?.hide();
+    });
+  }
+
+  function handleFilter(state) {
+    if (!state.filterSelect) {
+      return;
+    }
+
+    state.filterSelect.addEventListener('change', () => {
+      if (state.view === 'detail') {
+        switchToListView(state);
+      }
+      const filterValue = state.filterSelect.value || '';
+      const filtered = filterValue
+        ? state.data.images.filter(image => (image.product ?? image[2]) === filterValue)
+        : state.data.images;
+      renderImageRows(state, filtered, filterValue);
+    });
+  }
+
+  function handleCompareInteractions(state, helpers) {
+    const {
+      compareProductSelect,
+      compareImageSelect,
+      compareBaseSelect,
+      compareTargetSelect,
+      compareResultsSearch
+    } = state;
+
+    if (compareProductSelect) {
+      compareProductSelect.addEventListener('change', () => {
+        state.compareSelections.product = compareProductSelect.value || '';
+        state.compareSelections.image = '';
+        state.compareSelections.baseVersion = '';
+        state.compareSelections.targetVersion = '';
+        updateCompareImageOptions(state);
+        resetComparisonResults(state);
+        const hasImages = Boolean(state.compareImageSelect && state.compareImageSelect.options.length > 1);
+        if (!state.compareSelections.product) {
+          helpers.compare?.show('Select a product to begin comparing images.', 'info');
+        } else if (!hasImages) {
+          helpers.compare?.show('No images available for the selected product yet.', 'info');
         } else {
-            helpers.form.hide();
-            helpers.compare?.hide();
-            helpers.delete?.hide();
-            syncCompareSelectors(state);
-            syncDeleteSelectors(state);
-            if (!state.compareCard?.classList.contains('show')) {
-                resetComparisonResults(state);
-            }
+          helpers.compare?.hide();
         }
-
-        const filterValue = state.filterSelect?.value || '';
-        const filtered = filterValue
-            ? state.data.images.filter(image => (image.product ?? image[2]) === filterValue)
-            : state.data.images;
-        renderImageRows(state, filtered, filterValue);
+      });
     }
 
-    function handleForm(state, helpers) {
-        if (!state.form) {
-            return;
+    if (compareImageSelect) {
+      compareImageSelect.addEventListener('change', () => {
+        state.compareSelections.image = compareImageSelect.value || '';
+        state.compareSelections.baseVersion = '';
+        state.compareSelections.targetVersion = '';
+        const versions = updateCompareVersionOptions(state);
+        resetComparisonResults(state);
+        if (state.compareSelections.image && versions.length < 2) {
+          helpers.compare?.show('Select an image with at least two versions to compare.', 'info');
+        } else {
+          helpers.compare?.hide();
         }
-
-        state.form.addEventListener('submit', async event => {
-            event.preventDefault();
-            helpers.form.hide();
-
-            const formData = new FormData(state.form);
-            const payload = {
-                name: formData.get('name')?.trim(),
-                version: formData.get('version')?.trim(),
-                product: formData.get('product')?.trim(),
-                team: formData.get('team')?.trim()
-            };
-
-            if (!payload.name || !payload.version || !payload.product || !payload.team) {
-                helpers.form.show('All fields are required to register an image.', 'error');
-                return;
-            }
-
-            try {
-                const response = await fetchJSON(apiUrl('/image'), {
-                    method: 'POST',
-                    body: JSON.stringify(payload)
-                });
-
-                if (!response || response.status === false) {
-                    throw new Error('The image could not be saved.');
-                }
-
-                state.setFormVisible?.(false);
-                helpers.form.show('Image saved successfully.', 'success');
-                loadData(state, helpers);
-            } catch (error) {
-                helpers.form.show(error.message || 'Failed to save image.', 'error');
-            }
-        });
-
-        state.form.addEventListener('reset', () => {
-            helpers.form.hide();
-            if (state.teamSelect) {
-                state.teamSelect.value = '';
-            }
-            updateImageProductOptions(state);
-        });
+      });
     }
 
-    function handleImageFormTeamSelection(state, helpers) {
-        if (!state.teamSelect) {
-            return;
-        }
-        state.teamSelect.addEventListener('change', () => {
-            updateImageProductOptions(state);
-            helpers.form?.hide();
-        });
+    if (compareBaseSelect) {
+      compareBaseSelect.addEventListener('change', () => {
+        state.compareSelections.baseVersion = compareBaseSelect.value || '';
+      });
     }
 
-    function handleFilter(state) {
-        if (!state.filterSelect) {
-            return;
+    if (compareTargetSelect) {
+      compareTargetSelect.addEventListener('change', () => {
+        state.compareSelections.targetVersion = compareTargetSelect.value || '';
+      });
+    }
+
+    if (compareResultsSearch) {
+      compareResultsSearch.addEventListener('input', () => applyComparisonSearch(state));
+    }
+
+    if (state.compareSummary) {
+      state.compareSummary.addEventListener('click', event => {
+        const button = event.target.closest('[data-compare-filter]');
+        if (!button || button.disabled) {
+          return;
         }
 
-        state.filterSelect.addEventListener('change', () => {
-            if (state.view === 'detail') {
-                switchToListView(state);
+        const key = button.getAttribute('data-compare-filter');
+        state.compareActiveFilter = state.compareActiveFilter === key ? null : key;
+        updateComparisonStats(state, state.compareStats || {});
+        applyComparisonSearch(state);
+      });
+    }
+  }
+
+  function handleDeleteInteractions(state, helpers) {
+    const { deleteProductSelect, deleteImageSelect, deleteVersionSelect, deleteSelections } = state;
+    if (deleteProductSelect) {
+      deleteProductSelect.addEventListener('change', () => {
+        deleteSelections.product = deleteProductSelect.value || '';
+        deleteSelections.image = '';
+        deleteSelections.version = '';
+        updateDeleteImageOptions(state);
+        helpers.delete?.hide();
+      });
+    }
+
+    if (deleteImageSelect) {
+      deleteImageSelect.addEventListener('change', () => {
+        deleteSelections.image = deleteImageSelect.value || '';
+        deleteSelections.version = '';
+        updateDeleteVersionOptions(state);
+        helpers.delete?.hide();
+      });
+    }
+
+    if (deleteVersionSelect) {
+      deleteVersionSelect.addEventListener('change', () => {
+        deleteSelections.version = deleteVersionSelect.value || '';
+      });
+    }
+  }
+
+  function handleDeleteForm(state, helpers) {
+    if (!state.deleteForm) {
+      return;
+    }
+
+    state.deleteForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      helpers.delete?.hide();
+
+      const product = state.deleteProductSelect?.value?.trim();
+      const image = state.deleteImageSelect?.value?.trim();
+      const version = state.deleteVersionSelect?.value?.trim();
+
+      if (!product || !image) {
+        helpers.delete?.show('Product and image are required.', 'error');
+        return;
+      }
+
+      const team = getTeamForProduct(state.data?.products || [], product);
+      if (!team) {
+        helpers.delete?.show('Unable to determine the team for this product.', 'error');
+        return;
+      }
+
+      const confirmation = version
+        ? `Delete version "${version}" of "${image}" for product "${product}"?`
+        : `Delete all versions of "${image}" for product "${product}"?`;
+
+      if (!window.confirm(confirmation)) {
+        return;
+      }
+
+      const params = new URLSearchParams({ n: image });
+      if (version) {
+        params.append('ver', version);
+      }
+
+      const endpoint = `/image/${encodeURIComponent(team)}/${encodeURIComponent(product)}?${params.toString()}`;
+
+      try {
+        await fetchJSON(apiUrl(endpoint), { method: 'DELETE' });
+        await loadData(state, helpers);
+        helpers.delete?.show(
+          version
+            ? `Version "${version}" deleted successfully.`
+            : `All versions of "${image}" were deleted.`,
+          'success'
+        );
+        state.deleteForm.reset();
+        resetDeleteSelections(state);
+        updateDeleteImageOptions(state);
+      } catch (error) {
+        helpers.delete?.show(error.message || 'Failed to delete image.', 'error');
+      }
+    });
+
+    state.deleteForm.addEventListener('reset', () => {
+      helpers.delete?.hide();
+      resetDeleteSelections(state);
+      updateDeleteImageOptions(state);
+    });
+  }
+
+  function handleCompareForm(state, helpers) {
+    if (!state.compareForm) {
+      return;
+    }
+
+    state.compareForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      helpers.compare?.hide();
+
+      const product = state.compareProductSelect?.value?.trim();
+      const image = state.compareImageSelect?.value?.trim();
+      const baseVersion = state.compareBaseSelect?.value?.trim();
+      const targetVersion = state.compareTargetSelect?.value?.trim();
+
+      if (!product || !image || !baseVersion || !targetVersion) {
+        helpers.compare?.show('All fields are required to compare images.', 'error');
+        return;
+      }
+
+      if (baseVersion === targetVersion) {
+        helpers.compare?.show('Select two different versions to compare.', 'error');
+        return;
+      }
+
+      const team = getTeamForProduct(state.data?.products || [], product);
+      if (!team) {
+        helpers.compare?.show('Unable to determine the team for this product.', 'error');
+        return;
+      }
+
+      resetComparisonResults(state, 'Loading comparison…', { keepVisible: true });
+      state.compareSelections.product = product;
+      state.compareSelections.image = image;
+      state.compareSelections.baseVersion = baseVersion;
+      state.compareSelections.targetVersion = targetVersion;
+      state.compareActiveFilter = null;
+
+      if (state.compareResultsMeta) {
+        state.compareResultsMeta.textContent = `Product: ${product} · ${baseVersion} → ${targetVersion}`;
+      }
+      if (state.compareResultsTitle) {
+        state.compareResultsTitle.textContent = `${image} Comparison`;
+      }
+
+      try {
+        const endpoint = `/image/compare/${encodeURIComponent(team)}/${encodeURIComponent(product)}/${encodeURIComponent(image)}/${encodeURIComponent(baseVersion)}/${encodeURIComponent(targetVersion)}`;
+        const payload = await fetchJSON(apiUrl(endpoint));
+        const result = payload?.result || {};
+        const comparison = Array.isArray(result.comparison) ? result.comparison : [];
+        const stats = result.stats || {};
+        state.currentComparison = comparison;
+        state.compareActiveFilter = null;
+        if (state.compareResultsSearch) {
+          state.compareResultsSearch.value = '';
+        }
+        renderComparisonTableHeader(state);
+        updateComparisonStats(state, stats);
+        applyComparisonSearch(state);
+        if (state.compareResultsContainer) {
+          state.compareResultsContainer.hidden = false;
+        }
+
+        if (!comparison.length) {
+          helpers.compare?.show('No differences were found between these versions.', 'info');
+        } else {
+          helpers.compare?.hide();
+        }
+      } catch (error) {
+        helpers.compare?.show(error.message || 'Failed to compare images.', 'error');
+        resetComparisonResults(state, 'Comparison failed.');
+      }
+    });
+
+    state.compareForm.addEventListener('reset', () => {
+      helpers.compare?.hide();
+      resetCompareSelections(state);
+      updateCompareImageOptions(state);
+      resetComparisonResults(state);
+    });
+  }
+
+  function renderColumnToggleDropdown(state) {
+    const { columnToggleDropdown, columnVisibility } = state;
+    if (!columnToggleDropdown) return;
+    columnToggleDropdown.innerHTML = '';
+    SCA_COLUMNS.forEach(col => {
+      const item = document.createElement('div');
+      item.className = 'column-toggle-item';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !!columnVisibility[col.key];
+      cb.id = `col-toggle-${col.key}`;
+      const lbl = document.createElement('label');
+      lbl.textContent = col.header;
+      lbl.setAttribute('for', cb.id);
+      item.appendChild(cb);
+      item.appendChild(lbl);
+      cb.addEventListener('change', () => {
+        state.columnVisibility[col.key] = cb.checked;
+        saveColumnVisibility(state.columnVisibility);
+        renderDetailTableHeader(state);
+        applyDetailSearch(state);
+      });
+      columnToggleDropdown.appendChild(item);
+    });
+  }
+
+  function renderDetailTableHeader(state) {
+    const { detailThead, detailSort } = state;
+    if (!detailThead) return;
+    const tr = detailThead.querySelector('tr') || document.createElement('tr');
+    tr.innerHTML = '';
+    getVisibleColumns(state).forEach(col => {
+      const th = createSortableHeader(col.header, col.key, detailSort, (key) => {
+        state.detailSort = toggleSortDirection(state.detailSort, key);
+        saveSortState('detail', state.detailSort);
+        renderDetailTableHeader(state);
+        applyDetailSearch(state);
+      });
+      tr.appendChild(th);
+    });
+    if (!tr.parentNode) detailThead.appendChild(tr);
+  }
+
+  function setupColumnToggle(state) {
+    const { columnToggleBtn, columnToggleDropdown } = state;
+    if (!columnToggleBtn || !columnToggleDropdown) return;
+
+    columnToggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = columnToggleDropdown.classList.contains('open');
+      columnToggleDropdown.classList.toggle('open', !isOpen);
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!columnToggleDropdown.contains(e.target) && e.target !== columnToggleBtn) {
+        columnToggleDropdown.classList.remove('open');
+      }
+    });
+
+    renderColumnToggleDropdown(state);
+  }
+
+  function renderComparisonColumnToggleDropdown(state) {
+    const { compareColumnToggleDropdown, comparisonColumnVisibility } = state;
+    if (!compareColumnToggleDropdown) return;
+    compareColumnToggleDropdown.innerHTML = '';
+    getComparisonColumns().forEach(col => {
+      const item = document.createElement('div');
+      item.className = 'column-toggle-item';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !!comparisonColumnVisibility[col.key];
+      cb.id = `compare-col-toggle-${col.key}`;
+      const lbl = document.createElement('label');
+      lbl.textContent = col.header;
+      lbl.setAttribute('for', cb.id);
+      item.appendChild(cb);
+      item.appendChild(lbl);
+      cb.addEventListener('change', () => {
+        state.comparisonColumnVisibility[col.key] = cb.checked;
+        saveComparisonColumnVisibility(state.comparisonColumnVisibility);
+        renderComparisonTableHeader(state);
+        applyComparisonSearch(state);
+      });
+      compareColumnToggleDropdown.appendChild(item);
+    });
+  }
+
+  function setupComparisonColumnToggle(state) {
+    const { compareColumnToggleBtn, compareColumnToggleDropdown } = state;
+    if (!compareColumnToggleBtn || !compareColumnToggleDropdown) return;
+
+    compareColumnToggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = compareColumnToggleDropdown.classList.contains('open');
+      compareColumnToggleDropdown.classList.toggle('open', !isOpen);
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!compareColumnToggleDropdown.contains(e.target) && e.target !== compareColumnToggleBtn) {
+        compareColumnToggleDropdown.classList.remove('open');
+      }
+    });
+
+    renderComparisonColumnToggleDropdown(state);
+  }
+
+  function renderVulnerabilityRows(state, items) {
+    const { detailRows } = state;
+    if (!detailRows) {
+      return;
+    }
+    const visCols = getVisibleColumns(state);
+
+    if (!Array.isArray(items) || !items.length) {
+      detailRows.innerHTML = `<tr><td colspan="${visCols.length}" class="empty">No vulnerabilities found for this image.</td></tr>`;
+      return;
+    }
+
+    detailRows.innerHTML = '';
+    items.forEach(item => {
+      const row = document.createElement('tr');
+      visCols.forEach(col => {
+        if (col.key === 'cvss') {
+          const cvssArr = Array.isArray(item?.cvss) ? item.cvss : [];
+          const td = document.createElement('td');
+          td.className = 'cvss-cell';
+          if (cvssArr.length) {
+            const byVersion = {};
+            for (const entry of cvssArr) {
+              const ver = entry.version || '?';
+              if (!byVersion[ver] || entry.type === 'Primary') {
+                byVersion[ver] = entry;
+              }
             }
-            const filterValue = state.filterSelect.value || '';
-            const filtered = filterValue
-                ? state.data.images.filter(image => (image.product ?? image[2]) === filterValue)
-                : state.data.images;
-            renderImageRows(state, filtered, filterValue);
-        });
-    }
-
-    function handleCompareInteractions(state, helpers) {
-        const {
-            compareProductSelect,
-            compareImageSelect,
-            compareBaseSelect,
-            compareTargetSelect,
-            compareResultsSearch
-        } = state;
-
-        if (compareProductSelect) {
-            compareProductSelect.addEventListener('change', () => {
-                state.compareSelections.product = compareProductSelect.value || '';
-                state.compareSelections.image = '';
-                state.compareSelections.baseVersion = '';
-                state.compareSelections.targetVersion = '';
-                updateCompareImageOptions(state);
-                resetComparisonResults(state);
-                const hasImages = Boolean(state.compareImageSelect && state.compareImageSelect.options.length > 1);
-                if (!state.compareSelections.product) {
-                    helpers.compare?.show('Select a product to begin comparing images.', 'info');
-                } else if (!hasImages) {
-                    helpers.compare?.show('No images available for the selected product yet.', 'info');
-                } else {
-                    helpers.compare?.hide();
-                }
+            const chips = Object.entries(byVersion).map(([ver, e]) => {
+              const score = e.metrics?.baseScore ?? e.score ?? '—';
+              return `<span class="cvss-chip" title="${e.source || ''} (${e.type || ''})"><span class="cvss-chip--muted">v${ver}</span> ${score}</span>`;
             });
+            td.innerHTML = `<div class="cvss-stack">${chips.join('')}</div>`;
+          } else {
+            td.textContent = '—';
+          }
+          row.appendChild(td);
+        } else if (col.key === 'epss') {
+          const td = document.createElement('td');
+          const epssArr = Array.isArray(item?.epss) ? item.epss : [];
+          if (epssArr.length) {
+            const e = epssArr[0];
+            const score = e?.epss ?? e?.score;
+            if (score !== undefined && score !== null) {
+              const pct = (score * 100).toFixed(2) + '%';
+              const percentile = e?.percentile;
+              if (percentile !== undefined && percentile !== null) {
+                td.innerHTML = `<span class="epss-score">${pct}</span> <span class="epss-percentile" title="Percentile">P${(percentile * 100).toFixed(1)}</span>`;
+              } else {
+                td.textContent = pct;
+              }
+            } else {
+              td.textContent = '—';
+            }
+          } else {
+            td.textContent = '—';
+          }
+          row.appendChild(td);
+        } else if (col.key === 'severity') {
+          const td = document.createElement('td');
+          const level = item?.severity_level || '';
+          const badge = document.createElement('span');
+          badge.className = `severity-badge ${getSeverityBadgeClass(level)}`;
+          badge.textContent = level || '—';
+          td.appendChild(badge);
+          row.appendChild(td);
+        } else {
+          const text = col.extract(item);
+          row.appendChild(createElementWithAttrs('td', text || '—'));
         }
+      });
+      detailRows.appendChild(row);
+    });
+  }
 
-        if (compareImageSelect) {
-            compareImageSelect.addEventListener('change', () => {
-                state.compareSelections.image = compareImageSelect.value || '';
-                state.compareSelections.baseVersion = '';
-                state.compareSelections.targetVersion = '';
-                const versions = updateCompareVersionOptions(state);
-                resetComparisonResults(state);
-                if (state.compareSelections.image && versions.length < 2) {
-                    helpers.compare?.show('Select an image with at least two versions to compare.', 'info');
-                } else {
-                    helpers.compare?.hide();
-                }
-            });
-        }
+  function switchToDetailView(state, imageMeta) {
+    const { listCard, formCard, deleteCard, compareCard, detailCard, detailTitle, detailMeta } = state;
+    state.setCompareVisible?.(false, { suppressListToggle: true, nextView: 'detail' });
+    state.view = 'detail';
+    if (listCard) {
+      listCard.hidden = true;
+    }
+    if (formCard) {
+      formCard.hidden = true;
+    }
+    if (deleteCard) {
+      deleteCard.hidden = true;
+    }
+    if (compareCard) {
+      compareCard.hidden = true;
+    }
+    if (detailCard) {
+      detailCard.hidden = false;
+    }
+    if (detailTitle) {
+      detailTitle.textContent = `${imageMeta.name} · ${imageMeta.version}`;
+    }
+    if (detailMeta) {
+      const teamValue = imageMeta.team || getTeamForProduct(state.data?.products || [], imageMeta.product);
+      const teamLabel = teamValue ? ` · Team: ${teamValue}` : '';
+      detailMeta.textContent = `Product: ${imageMeta.product}${teamLabel}`;
+    }
+    setPageTitle?.(`Images · ${imageMeta.name} ${imageMeta.version}`);
+  }
 
-        if (compareBaseSelect) {
-            compareBaseSelect.addEventListener('change', () => {
-                state.compareSelections.baseVersion = compareBaseSelect.value || '';
-            });
-        }
+  function switchToListView(state) {
+    const { listCard, formCard, deleteCard, compareCard, detailCard, detailRows, detailFeedback, detailSearchInput } = state;
+    state.view = 'list';
+    state.currentVulns = [];
+    if (detailCard) {
+      detailCard.hidden = true;
+    }
+    if (listCard) {
+      listCard.hidden = false;
+    }
+    if (formCard) {
+      formCard.hidden = false;
+    }
+    if (deleteCard) {
+      deleteCard.hidden = false;
+    }
+    if (compareCard) {
+      compareCard.hidden = false;
+    }
+    if (detailRows) {
+      const colCount = getVisibleColumns(state).length;
+      detailRows.innerHTML = `<tr><td colspan="${colCount}" class="empty">Select an image to view vulnerabilities.</td></tr>`;
+    }
+    if (detailFeedback) {
+      detailFeedback.hidden = true;
+      detailFeedback.textContent = '';
+    }
+    if (detailSearchInput) {
+      detailSearchInput.value = '';
+    }
+    setPageTitle?.('Images');
+  }
 
-        if (compareTargetSelect) {
-            compareTargetSelect.addEventListener('change', () => {
-                state.compareSelections.targetVersion = compareTargetSelect.value || '';
-            });
-        }
+  async function showImageDetails(state, imageMeta) {
+    const { detailFeedback, detailSearchInput } = state;
+    switchToDetailView(state, imageMeta);
 
-        if (compareResultsSearch) {
-            compareResultsSearch.addEventListener('input', () => applyComparisonSearch(state));
-        }
-
-        if (state.compareSummary) {
-            state.compareSummary.addEventListener('click', event => {
-                const button = event.target.closest('[data-compare-filter]');
-                if (!button || button.disabled) {
-                    return;
-                }
-
-                const key = button.getAttribute('data-compare-filter');
-                state.compareActiveFilter = state.compareActiveFilter === key ? null : key;
-                updateComparisonStats(state, state.compareStats || {});
-                applyComparisonSearch(state);
-            });
-        }
+    if (detailFeedback) {
+      detailFeedback.hidden = true;
+      detailFeedback.textContent = '';
+    }
+    const colCount = getVisibleColumns(state).length;
+    if (state.detailRows) {
+      state.detailRows.innerHTML = `<tr><td colspan="${colCount}" class="empty">Loading vulnerabilities…</td></tr>`;
+    }
+    if (detailSearchInput) {
+      detailSearchInput.value = '';
     }
 
-    function handleDeleteInteractions(state, helpers) {
-        const { deleteProductSelect, deleteImageSelect, deleteVersionSelect, deleteSelections } = state;
-        if (deleteProductSelect) {
-            deleteProductSelect.addEventListener('change', () => {
-                deleteSelections.product = deleteProductSelect.value || '';
-                deleteSelections.image = '';
-                deleteSelections.version = '';
-                updateDeleteImageOptions(state);
-                helpers.delete?.hide();
-            });
-        }
-
-        if (deleteImageSelect) {
-            deleteImageSelect.addEventListener('change', () => {
-                deleteSelections.image = deleteImageSelect.value || '';
-                deleteSelections.version = '';
-                updateDeleteVersionOptions(state);
-                helpers.delete?.hide();
-            });
-        }
-
-        if (deleteVersionSelect) {
-            deleteVersionSelect.addEventListener('change', () => {
-                deleteSelections.version = deleteVersionSelect.value || '';
-            });
-        }
+    const team = imageMeta.team || getTeamForProduct(state.data?.products || [], imageMeta.product);
+    if (!team) {
+      state.currentVulns = [];
+      renderVulnerabilityRows(state, []);
+      if (detailFeedback) {
+        detailFeedback.textContent = 'Unable to determine the team for this image.';
+        detailFeedback.className = 'inline-message inline-message--error';
+        detailFeedback.hidden = false;
+      }
+      return;
     }
+    imageMeta.team = team;
 
-    function handleDeleteForm(state, helpers) {
-        if (!state.deleteForm) {
-            return;
-        }
+    try {
+      const endpoint = `/image/${encodeURIComponent(team)}/${encodeURIComponent(imageMeta.product)}/${encodeURIComponent(imageMeta.name)}/${encodeURIComponent(imageMeta.version)}/vuln-sca`;
+      const payload = await fetchJSON(apiUrl(endpoint));
+      const items = payload && Array.isArray(payload.result) ? payload.result : [];
+      state.currentVulns = items;
+      renderDetailTableHeader(state);
+      applyDetailSearch(state);
+    } catch (error) {
+      state.currentVulns = [];
+      renderVulnerabilityRows(state, []);
+      if (detailFeedback) {
+        detailFeedback.textContent = error.message || 'Unable to load vulnerabilities.';
+        detailFeedback.className = 'inline-message inline-message--error';
+        detailFeedback.hidden = false;
+      }
+    }
+  }
 
-        state.deleteForm.addEventListener('submit', async event => {
-            event.preventDefault();
-            helpers.delete?.hide();
+  function applyDetailSearch(state) {
+    const { currentVulns, detailSearchInput, detailSort } = state;
+    const source = Array.isArray(currentVulns) ? currentVulns : [];
 
-            const product = state.deleteProductSelect?.value?.trim();
-            const image = state.deleteImageSelect?.value?.trim();
-            const version = state.deleteVersionSelect?.value?.trim();
+    let result = source;
 
-            if (!product || !image) {
-                helpers.delete?.show('Product and image are required.', 'error');
-                return;
-            }
-
-            const team = getTeamForProduct(state.data?.products || [], product);
-            if (!team) {
-                helpers.delete?.show('Unable to determine the team for this product.', 'error');
-                return;
-            }
-
-            const confirmation = version
-                ? `Delete version "${version}" of "${image}" for product "${product}"?`
-                : `Delete all versions of "${image}" for product "${product}"?`;
-
-            if (!window.confirm(confirmation)) {
-                return;
-            }
-
-            const params = new URLSearchParams({ n: image });
-            if (version) {
-                params.append('ver', version);
-            }
-
-            const endpoint = `/image/${encodeURIComponent(team)}/${encodeURIComponent(product)}?${params.toString()}`;
-
-            try {
-                await fetchJSON(apiUrl(endpoint), { method: 'DELETE' });
-                await loadData(state, helpers);
-                helpers.delete?.show(
-                    version
-                        ? `Version "${version}" deleted successfully.`
-                        : `All versions of "${image}" were deleted.`,
-                    'success'
-                );
-                state.deleteForm.reset();
-                resetDeleteSelections(state);
-                updateDeleteImageOptions(state);
-            } catch (error) {
-                helpers.delete?.show(error.message || 'Failed to delete image.', 'error');
-            }
+    // Apply text filter
+    const term = detailSearchInput?.value?.trim().toLowerCase();
+    if (term) {
+      const visCols = getVisibleColumns(state);
+      result = source.filter(item => {
+        return visCols.some(col => {
+          let text = '';
+          if (col.key === 'cvss') {
+            const cvssArr = Array.isArray(item?.cvss) ? item.cvss : [];
+            text = cvssArr.map(c => `${c.score ?? ''} ${c.severity ?? ''} ${c.version ? 'v' + c.version : ''}`).join(' ');
+          } else if (col.key === 'severity') {
+            text = item?.severity_level || '';
+          } else {
+            text = col.extract(item);
+          }
+          return text && String(text).toLowerCase().includes(term);
         });
-
-        state.deleteForm.addEventListener('reset', () => {
-            helpers.delete?.hide();
-            resetDeleteSelections(state);
-            updateDeleteImageOptions(state);
-        });
+      });
     }
 
-    function handleCompareForm(state, helpers) {
-        if (!state.compareForm) {
-            return;
-        }
-
-        state.compareForm.addEventListener('submit', async event => {
-            event.preventDefault();
-            helpers.compare?.hide();
-
-            const product = state.compareProductSelect?.value?.trim();
-            const image = state.compareImageSelect?.value?.trim();
-            const baseVersion = state.compareBaseSelect?.value?.trim();
-            const targetVersion = state.compareTargetSelect?.value?.trim();
-
-            if (!product || !image || !baseVersion || !targetVersion) {
-                helpers.compare?.show('All fields are required to compare images.', 'error');
-                return;
-            }
-
-            if (baseVersion === targetVersion) {
-                helpers.compare?.show('Select two different versions to compare.', 'error');
-                return;
-            }
-
-            const team = getTeamForProduct(state.data?.products || [], product);
-            if (!team) {
-                helpers.compare?.show('Unable to determine the team for this product.', 'error');
-                return;
-            }
-
-            resetComparisonResults(state, 'Loading comparison…', { keepVisible: true });
-            state.compareSelections.product = product;
-            state.compareSelections.image = image;
-            state.compareSelections.baseVersion = baseVersion;
-            state.compareSelections.targetVersion = targetVersion;
-            state.compareActiveFilter = null;
-
-            if (state.compareResultsMeta) {
-                state.compareResultsMeta.textContent = `Product: ${product} · ${baseVersion} → ${targetVersion}`;
-            }
-            if (state.compareResultsTitle) {
-                state.compareResultsTitle.textContent = `${image} Comparison`;
-            }
-
-            try {
-                const endpoint = `/image/compare/${encodeURIComponent(team)}/${encodeURIComponent(product)}/${encodeURIComponent(image)}/${encodeURIComponent(baseVersion)}/${encodeURIComponent(targetVersion)}`;
-                const payload = await fetchJSON(apiUrl(endpoint));
-                const result = payload?.result || {};
-                const comparison = Array.isArray(result.comparison) ? result.comparison : [];
-                const stats = result.stats || {};
-                state.currentComparison = comparison;
-                state.compareActiveFilter = null;
-                if (state.compareResultsSearch) {
-                    state.compareResultsSearch.value = '';
-                }
-                updateComparisonStats(state, stats);
-                applyComparisonSearch(state);
-                if (state.compareResultsContainer) {
-                    state.compareResultsContainer.hidden = false;
-                }
-
-                if (!comparison.length) {
-                    helpers.compare?.show('No differences were found between these versions.', 'info');
-                } else {
-                    helpers.compare?.hide();
-                }
-            } catch (error) {
-                helpers.compare?.show(error.message || 'Failed to compare images.', 'error');
-                resetComparisonResults(state, 'Comparison failed.');
-            }
-        });
-
-        state.compareForm.addEventListener('reset', () => {
-            helpers.compare?.hide();
-            resetCompareSelections(state);
-            updateCompareImageOptions(state);
-            resetComparisonResults(state);
-        });
+    // Apply sorting
+    if (detailSort?.key) {
+      result = sortItems(result, detailSort.key, detailSort.direction, SCA_COLUMNS);
     }
 
-    function renderColumnToggleDropdown(state) {
-        const { columnToggleDropdown, columnVisibility } = state;
-        if (!columnToggleDropdown) return;
-        columnToggleDropdown.innerHTML = '';
-        SCA_COLUMNS.forEach(col => {
-            const item = document.createElement('div');
-            item.className = 'column-toggle-item';
-            const cb = document.createElement('input');
-            cb.type = 'checkbox';
-            cb.checked = !!columnVisibility[col.key];
-            cb.id = `col-toggle-${col.key}`;
-            const lbl = document.createElement('label');
-            lbl.textContent = col.header;
-            lbl.setAttribute('for', cb.id);
-            item.appendChild(cb);
-            item.appendChild(lbl);
-            cb.addEventListener('change', () => {
-                state.columnVisibility[col.key] = cb.checked;
-                saveColumnVisibility(state.columnVisibility);
-                renderDetailTableHeader(state);
-                applyDetailSearch(state);
-            });
-            columnToggleDropdown.appendChild(item);
-        });
+    renderVulnerabilityRows(state, result);
+  }
+
+  function attachListInteractions(state, helpers) {
+    if (!state.rowsBody) {
+      return;
     }
 
-    function renderDetailTableHeader(state) {
-        const { detailThead } = state;
-        if (!detailThead) return;
-        const tr = detailThead.querySelector('tr') || document.createElement('tr');
-        tr.innerHTML = '';
-        getVisibleColumns(state).forEach(col => {
-            const th = document.createElement('th');
-            th.textContent = col.header;
-            tr.appendChild(th);
-        });
-        if (!tr.parentNode) detailThead.appendChild(tr);
+    state.rowsBody.addEventListener('click', event => {
+      const trigger = event.target.closest('[data-image-action="details"]');
+      if (!trigger) {
+        return;
+      }
+
+      const name = trigger.getAttribute('data-image-name');
+      const version = trigger.getAttribute('data-image-version');
+      const product = trigger.getAttribute('data-image-product');
+      let team = trigger.getAttribute('data-image-team') || '';
+      if (!team) {
+        team = getTeamForProduct(state.data?.products || [], product);
+      }
+      if (!name || !version || !product) {
+        return;
+      }
+
+      showImageDetails(state, { name, version, product, team });
+    });
+  }
+
+  function setupFormToggle(state, helpers) {
+    const toggle = createFormToggle({
+      button: state.toggleFormButton,
+      container: state.formCard,
+      form: state.form,
+      labels: {
+        open: '<i class="fas fa-plus"></i> Create Image',
+        close: '<i class="fas fa-times"></i> Cancel'
+      },
+      onShow: () => helpers.form.hide(),
+      onHide: () => {
+        if (state.teamSelect) {
+          state.teamSelect.value = '';
+        }
+        updateImageProductOptions(state);
+      }
+    });
+
+    state.setFormVisible = toggle.setVisible;
+  }
+
+  function setupDeleteToggle(state, helpers) {
+    const toggle = createFormToggle({
+      button: state.toggleDeleteButton,
+      container: state.deleteCard,
+      form: state.deleteForm,
+      labels: {
+        open: '<i class="fas fa-trash"></i> Delete Images',
+        close: '<i class="fas fa-times"></i> Cancel Delete'
+      },
+      onShow: () => helpers.delete?.hide(),
+      onHide: () => resetDeleteSelections(state)
+    });
+
+    state.setDeleteVisible = toggle.setVisible;
+  }
+
+  function setupCompareToggle(state, helpers) {
+    const { toggleCompareButton, compareCard, compareForm } = state;
+    if (!toggleCompareButton || !compareCard) {
+      return;
     }
 
-    function setupColumnToggle(state) {
-        const { columnToggleBtn, columnToggleDropdown } = state;
-        if (!columnToggleBtn || !columnToggleDropdown) return;
+    const firstField = compareForm?.querySelector('select, input, textarea');
 
-        columnToggleBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const isOpen = columnToggleDropdown.classList.contains('open');
-            columnToggleDropdown.classList.toggle('open', !isOpen);
-        });
+    const updateButtonLabel = visible => {
+      toggleCompareButton.innerHTML = visible
+        ? '<i class="fas fa-times"></i> Cancel Compare'
+        : '<i class="fas fa-code-compare"></i> Compare Images';
+      toggleCompareButton.setAttribute('aria-expanded', String(visible));
+    };
 
-        document.addEventListener('click', (e) => {
-            if (!columnToggleDropdown.contains(e.target) && e.target !== columnToggleBtn) {
-                columnToggleDropdown.classList.remove('open');
-            }
-        });
+    const setCompareVisible = (visible, options = {}) => {
+      const { suppressListToggle = false, nextView } = options;
+      compareCard.hidden = false;
+      const wasVisible = compareCard.classList.contains('show');
+      if (visible === wasVisible && !visible && !nextView) {
+        updateButtonLabel(visible);
+        return;
+      }
 
-        renderColumnToggleDropdown(state);
-    }
+      compareCard.classList.toggle('show', visible);
+      updateButtonLabel(visible);
 
-    function renderVulnerabilityRows(state, items) {
-        const { detailRows } = state;
-        if (!detailRows) {
-            return;
+      if (visible) {
+        state.previousView = state.view || 'list';
+        state.view = 'compare';
+        if (!suppressListToggle) {
+          if (state.listCard) {
+            state.listCard.hidden = true;
+          }
+          if (state.formCard) {
+            state.formCard.hidden = true;
+          }
         }
-        const visCols = getVisibleColumns(state);
-
-        if (!Array.isArray(items) || !items.length) {
-            detailRows.innerHTML = `<tr><td colspan="${visCols.length}" class="empty">No vulnerabilities found for this image.</td></tr>`;
-            return;
+        if (state.detailCard) {
+          state.detailCard.hidden = true;
         }
+        helpers.compare?.hide();
+        firstField?.focus();
+        return;
+      }
 
-        detailRows.innerHTML = '';
-        items.forEach(item => {
-            const row = document.createElement('tr');
-            visCols.forEach(col => {
-                if (col.key === 'cvss') {
-                    const cvssArr = Array.isArray(item?.cvss) ? item.cvss : [];
-                    const td = document.createElement('td');
-                    td.className = 'cvss-cell';
-                    if (cvssArr.length) {
-                        const byVersion = {};
-                        for (const entry of cvssArr) {
-                            const ver = entry.version || '?';
-                            if (!byVersion[ver] || entry.type === 'Primary') {
-                                byVersion[ver] = entry;
-                            }
-                        }
-                        const chips = Object.entries(byVersion).map(([ver, e]) => {
-                            const score = e.metrics?.baseScore ?? e.score ?? '—';
-                            return `<span class="cvss-chip" title="${e.source || ''} (${e.type || ''})"><span class="cvss-chip--muted">v${ver}</span> ${score}</span>`;
-                        });
-                        td.innerHTML = `<div class="cvss-stack">${chips.join('')}</div>`;
-                    } else {
-                        td.textContent = '—';
-                    }
-                    row.appendChild(td);
-                } else if (col.key === 'epss') {
-                    const td = document.createElement('td');
-                    const epssArr = Array.isArray(item?.epss) ? item.epss : [];
-                    if (epssArr.length) {
-                        const e = epssArr[0];
-                        const score = e?.epss ?? e?.score;
-                        if (score !== undefined && score !== null) {
-                            const pct = (score * 100).toFixed(2) + '%';
-                            const percentile = e?.percentile;
-                            if (percentile !== undefined && percentile !== null) {
-                                td.innerHTML = `<span class="epss-score">${pct}</span> <span class="epss-percentile" title="Percentile">P${(percentile * 100).toFixed(1)}</span>`;
-                            } else {
-                                td.textContent = pct;
-                            }
-                        } else {
-                            td.textContent = '—';
-                        }
-                    } else {
-                        td.textContent = '—';
-                    }
-                    row.appendChild(td);
-                } else if (col.key === 'severity') {
-                    const td = document.createElement('td');
-                    const level = item?.severity_level || '';
-                    const badge = document.createElement('span');
-                    badge.className = `severity-badge ${getSeverityBadgeClass(level)}`;
-                    badge.textContent = level || '—';
-                    td.appendChild(badge);
-                    row.appendChild(td);
-                } else {
-                    const text = col.extract(item);
-                    row.appendChild(createElementWithAttrs('td', text || '—'));
-                }
-            });
-            detailRows.appendChild(row);
-        });
-    }
+      const targetView = nextView || state.previousView || 'list';
 
-    function switchToDetailView(state, imageMeta) {
-        const { listCard, formCard, deleteCard, compareCard, detailCard, detailTitle, detailMeta } = state;
-        state.setCompareVisible?.(false, { suppressListToggle: true, nextView: 'detail' });
-        state.view = 'detail';
-        if (listCard) {
-            listCard.hidden = true;
+      if (state.view === 'compare') {
+        state.view = targetView;
+      } else if (!state.view) {
+        state.view = targetView;
+      }
+
+      if (targetView === 'list') {
+        if (!suppressListToggle) {
+          if (state.listCard) {
+            state.listCard.hidden = false;
+          }
+          if (state.formCard) {
+            state.formCard.hidden = false;
+          }
         }
-        if (formCard) {
-            formCard.hidden = true;
+        if (state.detailCard) {
+          state.detailCard.hidden = true;
         }
-        if (deleteCard) {
-            deleteCard.hidden = true;
-        }
-        if (compareCard) {
-            compareCard.hidden = true;
-        }
-        if (detailCard) {
-            detailCard.hidden = false;
-        }
-        if (detailTitle) {
-            detailTitle.textContent = `${imageMeta.name} · ${imageMeta.version}`;
-        }
-        if (detailMeta) {
-            const teamValue = imageMeta.team || getTeamForProduct(state.data?.products || [], imageMeta.product);
-            const teamLabel = teamValue ? ` · Team: ${teamValue}` : '';
-            detailMeta.textContent = `Product: ${imageMeta.product}${teamLabel}`;
-        }
-        setPageTitle?.(`Images · ${imageMeta.name} ${imageMeta.version}`);
-    }
-
-    function switchToListView(state) {
-        const { listCard, formCard, deleteCard, compareCard, detailCard, detailRows, detailFeedback, detailSearchInput } = state;
-        state.view = 'list';
-        state.currentVulns = [];
-        if (detailCard) {
-            detailCard.hidden = true;
-        }
-        if (listCard) {
-            listCard.hidden = false;
-        }
-        if (formCard) {
-            formCard.hidden = false;
-        }
-        if (deleteCard) {
-            deleteCard.hidden = false;
-        }
-        if (compareCard) {
-            compareCard.hidden = false;
-        }
-        if (detailRows) {
-            const colCount = getVisibleColumns(state).length;
-            detailRows.innerHTML = `<tr><td colspan="${colCount}" class="empty">Select an image to view vulnerabilities.</td></tr>`;
-        }
-        if (detailFeedback) {
-            detailFeedback.hidden = true;
-            detailFeedback.textContent = '';
-        }
-        if (detailSearchInput) {
-            detailSearchInput.value = '';
-        }
-        setPageTitle?.('Images');
-    }
-
-    async function showImageDetails(state, imageMeta) {
-        const { detailFeedback, detailSearchInput } = state;
-        switchToDetailView(state, imageMeta);
-
-        if (detailFeedback) {
-            detailFeedback.hidden = true;
-            detailFeedback.textContent = '';
-        }
-        const colCount = getVisibleColumns(state).length;
-        if (state.detailRows) {
-            state.detailRows.innerHTML = `<tr><td colspan="${colCount}" class="empty">Loading vulnerabilities…</td></tr>`;
-        }
-        if (detailSearchInput) {
-            detailSearchInput.value = '';
-        }
-
-        const team = imageMeta.team || getTeamForProduct(state.data?.products || [], imageMeta.product);
-        if (!team) {
-            state.currentVulns = [];
-            renderVulnerabilityRows(state, []);
-            if (detailFeedback) {
-                detailFeedback.textContent = 'Unable to determine the team for this image.';
-                detailFeedback.className = 'inline-message inline-message--error';
-                detailFeedback.hidden = false;
-            }
-            return;
-        }
-        imageMeta.team = team;
-
-        try {
-            const endpoint = `/image/${encodeURIComponent(team)}/${encodeURIComponent(imageMeta.product)}/${encodeURIComponent(imageMeta.name)}/${encodeURIComponent(imageMeta.version)}/vuln-sca`;
-            const payload = await fetchJSON(apiUrl(endpoint));
-            const items = payload && Array.isArray(payload.result) ? payload.result : [];
-            state.currentVulns = items;
-            renderDetailTableHeader(state);
-            applyDetailSearch(state);
-        } catch (error) {
-            state.currentVulns = [];
-            renderVulnerabilityRows(state, []);
-            if (detailFeedback) {
-                detailFeedback.textContent = error.message || 'Unable to load vulnerabilities.';
-                detailFeedback.className = 'inline-message inline-message--error';
-                detailFeedback.hidden = false;
-            }
-        }
-    }
-
-    function applyDetailSearch(state) {
-        const { currentVulns, detailSearchInput } = state;
-        const source = Array.isArray(currentVulns) ? currentVulns : [];
-        if (!detailSearchInput) {
-            renderVulnerabilityRows(state, source);
-            return;
-        }
-
-        const term = detailSearchInput.value?.trim().toLowerCase();
-        if (!term) {
-            renderVulnerabilityRows(state, source);
-            return;
-        }
-
-        const visCols = getVisibleColumns(state);
-        const filtered = source.filter(item => {
-            return visCols.some(col => {
-                let text = '';
-                if (col.key === 'cvss') {
-                    const cvssArr = Array.isArray(item?.cvss) ? item.cvss : [];
-                    text = cvssArr.map(c => `${c.score ?? ''} ${c.severity ?? ''} ${c.version ? 'v' + c.version : ''}`).join(' ');
-                } else if (col.key === 'severity') {
-                    text = item?.severity_level || '';
-                } else {
-                    text = col.extract(item);
-                }
-                return text && String(text).toLowerCase().includes(term);
-            });
-        });
-
-        renderVulnerabilityRows(state, filtered);
-    }
-
-    function attachListInteractions(state, helpers) {
-        if (!state.rowsBody) {
-            return;
-        }
-
-        state.rowsBody.addEventListener('click', event => {
-            const trigger = event.target.closest('[data-image-action="details"]');
-            if (!trigger) {
-                return;
-            }
-
-            const name = trigger.getAttribute('data-image-name');
-            const version = trigger.getAttribute('data-image-version');
-            const product = trigger.getAttribute('data-image-product');
-            let team = trigger.getAttribute('data-image-team') || '';
-            if (!team) {
-                team = getTeamForProduct(state.data?.products || [], product);
-            }
-            if (!name || !version || !product) {
-                return;
-            }
-
-            showImageDetails(state, { name, version, product, team });
-        });
-    }
-
-    function setupFormToggle(state, helpers) {
-        const toggle = createFormToggle({
-            button: state.toggleFormButton,
-            container: state.formCard,
-            form: state.form,
-            labels: {
-                open: '<i class="fas fa-plus"></i> Create Image',
-                close: '<i class="fas fa-times"></i> Cancel'
-            },
-            onShow: () => helpers.form.hide(),
-            onHide: () => {
-                if (state.teamSelect) {
-                    state.teamSelect.value = '';
-                }
-                updateImageProductOptions(state);
-            }
-        });
-
-        state.setFormVisible = toggle.setVisible;
-    }
-
-    function setupDeleteToggle(state, helpers) {
-        const toggle = createFormToggle({
-            button: state.toggleDeleteButton,
-            container: state.deleteCard,
-            form: state.deleteForm,
-            labels: {
-                open: '<i class="fas fa-trash"></i> Delete Images',
-                close: '<i class="fas fa-times"></i> Cancel Delete'
-            },
-            onShow: () => helpers.delete?.hide(),
-            onHide: () => resetDeleteSelections(state)
-        });
-
-        state.setDeleteVisible = toggle.setVisible;
-    }
-
-    function setupCompareToggle(state, helpers) {
-        const { toggleCompareButton, compareCard, compareForm } = state;
-        if (!toggleCompareButton || !compareCard) {
-            return;
-        }
-
-        const firstField = compareForm?.querySelector('select, input, textarea');
-
-        const updateButtonLabel = visible => {
-            toggleCompareButton.innerHTML = visible
-                ? '<i class="fas fa-times"></i> Cancel Compare'
-                : '<i class="fas fa-code-compare"></i> Compare Images';
-            toggleCompareButton.setAttribute('aria-expanded', String(visible));
-        };
-
-        const setCompareVisible = (visible, options = {}) => {
-            const { suppressListToggle = false, nextView } = options;
-            compareCard.hidden = false;
-            const wasVisible = compareCard.classList.contains('show');
-            if (visible === wasVisible && !visible && !nextView) {
-                updateButtonLabel(visible);
-                return;
-            }
-
-            compareCard.classList.toggle('show', visible);
-            updateButtonLabel(visible);
-
-            if (visible) {
-                state.previousView = state.view || 'list';
-                state.view = 'compare';
-                if (!suppressListToggle) {
-                    if (state.listCard) {
-                        state.listCard.hidden = true;
-                    }
-                    if (state.formCard) {
-                        state.formCard.hidden = true;
-                    }
-                }
-                if (state.detailCard) {
-                    state.detailCard.hidden = true;
-                }
-                helpers.compare?.hide();
-                firstField?.focus();
-                return;
-            }
-
-            const targetView = nextView || state.previousView || 'list';
-
-            if (state.view === 'compare') {
-                state.view = targetView;
-            } else if (!state.view) {
-                state.view = targetView;
-            }
-
-            if (targetView === 'list') {
-                if (!suppressListToggle) {
-                    if (state.listCard) {
-                        state.listCard.hidden = false;
-                    }
-                    if (state.formCard) {
-                        state.formCard.hidden = false;
-                    }
-                }
-                if (state.detailCard) {
-                    state.detailCard.hidden = true;
-                }
-                compareForm?.reset();
-                resetCompareSelections(state);
-                resetComparisonResults(state);
-                return;
-            }
-
-            if (targetView === 'detail') {
-                if (!suppressListToggle) {
-                    if (state.listCard) {
-                        state.listCard.hidden = true;
-                    }
-                    if (state.formCard) {
-                        state.formCard.hidden = true;
-                    }
-                }
-                if (state.detailCard) {
-                    state.detailCard.hidden = false;
-                }
-            }
-        };
-
-        toggleCompareButton.addEventListener('click', () => {
-            const shouldShow = !compareCard.classList.contains('show');
-            setCompareVisible(shouldShow);
-        });
-
-        updateButtonLabel(false);
-        state.setCompareVisible = setCompareVisible;
-    }
-
-    registerRoute('images', () => {
-        const state = renderImagesPage();
-        if (!state) {
-            return;
-        }
-
-        const helpers = {
-            form: createMessageHelper(state.formFeedback),
-            list: createMessageHelper(state.listFeedback),
-            delete: createMessageHelper(state.deleteFeedback),
-            compare: createMessageHelper(state.compareFeedback)
-        };
-
+        compareForm?.reset();
         resetCompareSelections(state);
         resetComparisonResults(state);
-        resetDeleteSelections(state);
-        populateImageTeamOptions(state);
-        updateImageProductOptions(state);
-        loadData(state, helpers);
-        handleForm(state, helpers);
-        handleImageFormTeamSelection(state, helpers);
-        handleDeleteForm(state, helpers);
-        handleCompareForm(state, helpers);
-        handleDeleteInteractions(state, helpers);
-        handleCompareInteractions(state, helpers);
-        handleFilter(state);
-        setupFormToggle(state, helpers);
-        setupDeleteToggle(state, helpers);
-        setupCompareToggle(state, helpers);
-        attachListInteractions(state, helpers);
-        setupColumnToggle(state);
-        renderDetailTableHeader(state);
+        return;
+      }
 
-        if (state.detailBackButton) {
-            state.detailBackButton.addEventListener('click', () => {
-                switchToListView(state);
-            });
+      if (targetView === 'detail') {
+        if (!suppressListToggle) {
+          if (state.listCard) {
+            state.listCard.hidden = true;
+          }
+          if (state.formCard) {
+            state.formCard.hidden = true;
+          }
         }
+        if (state.detailCard) {
+          state.detailCard.hidden = false;
+        }
+      }
+    };
 
-        if (state.detailSearchInput) {
-            state.detailSearchInput.addEventListener('input', () => applyDetailSearch(state));
-        }
+    toggleCompareButton.addEventListener('click', () => {
+      const shouldShow = !compareCard.classList.contains('show');
+      setCompareVisible(shouldShow);
     });
+
+    updateButtonLabel(false);
+    state.setCompareVisible = setCompareVisible;
+  }
+
+  registerRoute('images', () => {
+    const state = renderImagesPage();
+    if (!state) {
+      return;
+    }
+
+    const helpers = {
+      form: createMessageHelper(state.formFeedback),
+      list: createMessageHelper(state.listFeedback),
+      delete: createMessageHelper(state.deleteFeedback),
+      compare: createMessageHelper(state.compareFeedback)
+    };
+
+    resetCompareSelections(state);
+    resetComparisonResults(state);
+    resetDeleteSelections(state);
+    populateImageTeamOptions(state);
+    updateImageProductOptions(state);
+    loadData(state, helpers);
+    handleForm(state, helpers);
+    handleImageFormTeamSelection(state, helpers);
+    handleDeleteForm(state, helpers);
+    handleCompareForm(state, helpers);
+    handleDeleteInteractions(state, helpers);
+    handleCompareInteractions(state, helpers);
+    handleFilter(state);
+    setupFormToggle(state, helpers);
+    setupDeleteToggle(state, helpers);
+    setupCompareToggle(state, helpers);
+    attachListInteractions(state, helpers);
+    renderListTableHeader(state);
+    setupColumnToggle(state);
+    renderDetailTableHeader(state);
+    setupComparisonColumnToggle(state);
+    renderComparisonTableHeader(state);
+
+    if (state.detailBackButton) {
+      state.detailBackButton.addEventListener('click', () => {
+        switchToListView(state);
+      });
+    }
+
+    if (state.detailSearchInput) {
+      state.detailSearchInput.addEventListener('input', () => applyDetailSearch(state));
+    }
+  });
 })();

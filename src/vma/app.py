@@ -40,7 +40,10 @@ def setup_args():
     importer.add_argument(
         "--host", default="0.0.0.0", help="Define the IP to run it on"
     )
-    importer.add_argument("--type", choices=["grype"], help="Scanner type")
+    importer.add_argument("--type", choices=["sca", "sast"], help="Scanner type")
+    importer.add_argument(
+        "--scanner", choices=["grype", "semgrep"], help="Scanner option"
+    )
     importer.add_argument(
         "--api-version", choices=["v1"], default="v1", help="API version to use"
     )
@@ -91,24 +94,37 @@ async def main():
             if args.secure:
                 url += "s"
             url += (
-                f"://{args.host}:{args.port}/api/{args.api_version}/import/sca"
+                f"://{args.host}:{args.port}/api/{args.api_version}/import/{args.type}"
             )
+
             headers = {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
             }
             payload = None
 
-            if args.type == "grype":
+            if args.scanner == "grype":
                 data = await par.grype_parser(path=file)
                 payload = {
-                    "scanner": args.type,
+                    "scanner": args.scanner,
                     "product": args.product,
                     "image_name": args.image,
                     "image_version": args.version,
                     "team": args.team,
                     "vulnerabilities": data,
                 }
+            elif args.scanner == "semgrep":
+                data = await par.semgrep_parser(path=file)
+                payload = {
+                    "scanner": args.scanner,
+                    "product": args.product,
+                    "team": args.team,
+                    "findings": data,
+                }
+            else:
+                logger.debug("Invalid scanner given by parameter")
+                return 1
+
             verify_ssl = not args.ignore_cert if hasattr(args, "ignore_cert") else True
             async with httpx.AsyncClient(verify=verify_ssl) as client:
                 res = await client.post(
