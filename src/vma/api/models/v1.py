@@ -31,7 +31,7 @@ class ImportSca(BaseModel):
     image_version: str
     product: str
     team: str
-    vulnerabilities: list  # List of VulnerabilitySca dicts
+    vulnerabilities: list  # List of VulnerabilityScaUniversal dicts (see data_schema.py)
 
 
 class ImageCompare(BaseModel):

@@ -745,8 +745,10 @@ queries = {
             (scanner, vuln_id, source, image_name, image_version, product, team,
              description, severity_level,
              affected_component_type, affected_component, affected_version, affected_path,
-             cvss, epss, urls, cwes, fix, related_vulnerabilities)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+             cvss, epss, urls, cwes, fix, related_vulnerabilities,
+             purl, namespace, risk_score, cpes, licenses, locations, upstreams, match_details)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+                $20, $21, $22, $23, $24, $25, $26, $27)
         ON CONFLICT (scanner, vuln_id, image_name, image_version, product, team, affected_component, affected_version)
         DO UPDATE SET
             source = EXCLUDED.source,
@@ -759,24 +761,44 @@ queries = {
             urls = EXCLUDED.urls,
             cwes = EXCLUDED.cwes,
             fix = EXCLUDED.fix,
-            related_vulnerabilities = EXCLUDED.related_vulnerabilities;
+            related_vulnerabilities = EXCLUDED.related_vulnerabilities,
+            purl = EXCLUDED.purl,
+            namespace = EXCLUDED.namespace,
+            risk_score = EXCLUDED.risk_score,
+            cpes = EXCLUDED.cpes,
+            licenses = EXCLUDED.licenses,
+            locations = EXCLUDED.locations,
+            upstreams = EXCLUDED.upstreams,
+            match_details = EXCLUDED.match_details;
     """,
     "get_vulnerabilities_sca_by_image": """
         SELECT scanner, vuln_id, source, description, severity_level,
                affected_component_type, affected_component, affected_version, affected_path,
-               cvss, epss, urls, cwes, fix, related_vulnerabilities
+               cvss, epss, urls, cwes, fix, related_vulnerabilities,
+               purl, namespace, risk_score, cpes, licenses, locations, upstreams, match_details
         FROM vulnerabilities_sca
         WHERE image_name = $1
           AND image_version = $2
           AND product = $3
           AND team = $4
-        ORDER BY severity_level DESC, vuln_id;
+        ORDER BY
+            CASE severity_level
+                WHEN 'Critical' THEN 1
+                WHEN 'High' THEN 2
+                WHEN 'Medium' THEN 3
+                WHEN 'Low' THEN 4
+                WHEN 'Negligible' THEN 5
+                ELSE 6
+            END,
+            risk_score DESC NULLS LAST,
+            vuln_id;
     """,
     "get_vulnerability_sca_by_id": """
         SELECT scanner, vuln_id, source, image_name, image_version, product, team,
                description, severity_level,
                affected_component_type, affected_component, affected_version, affected_path,
-               cvss, epss, urls, cwes, fix, related_vulnerabilities
+               cvss, epss, urls, cwes, fix, related_vulnerabilities,
+               purl, namespace, risk_score, cpes, licenses, locations, upstreams, match_details
         FROM vulnerabilities_sca
         WHERE vuln_id = $1 AND team = $2;
     """,
@@ -2298,10 +2320,10 @@ async def insert_vulnerability_sca(
     scanner: str,
 ) -> dict:
     """
-    Insert or update a VulnerabilitySca record.
+    Insert or update a vulnerability record in universal SCA format.
 
     Args:
-        vuln: Dict containing vulnerability data matching VulnerabilitySca model
+        vuln: Dict containing vulnerability data in universal format
         image_name: Name of the container image
         image_version: Version of the container image
         product: Product ID
@@ -2313,6 +2335,14 @@ async def insert_vulnerability_sca(
     res = {"status": True, "result": "Vulnerability inserted"}
     pool = await get_pool()
     try:
+        # Extract severity data from universal format
+        severity = vuln.get("severity", {})
+        severity_level = severity.get("level", "Unknown")
+        cvss = severity.get("cvss", [])
+        epss = severity.get("epss", [])
+        risk_score = severity.get("risk_score")
+        vuln_id = vuln.get("vuln_id", "")
+
         async with pool.acquire() as conn:
             await conn.set_type_codec(
                 "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
@@ -2320,27 +2350,36 @@ async def insert_vulnerability_sca(
             await conn.execute(
                 queries["insert_vulnerability_sca"],
                 scanner,
-                vuln["id"],
-                vuln["source"],
+                vuln_id,
+                vuln.get("source", ""),
                 image_name,
                 image_version,
                 product,
                 team,
                 vuln.get("description", ""),
-                vuln["severity"]["value"],
+                severity_level,
                 vuln.get("affected_component_type", ""),
                 vuln.get("affected_component", ""),
                 vuln.get("affected_version", ""),
                 vuln.get("affected_path", ""),
-                vuln["severity"].get("cvss", []),
-                vuln["severity"].get("epss", []),
-                vuln.get("urls", []),
-                vuln.get("cwes", []),
-                vuln.get("fix", {}),
-                vuln.get("related_vulnerabilities", []),
+                json.dumps(cvss),
+                json.dumps(epss),
+                json.dumps(vuln.get("urls", [])),
+                json.dumps(vuln.get("cwes", [])),
+                json.dumps(vuln.get("fix", {})),
+                json.dumps(vuln.get("related_vulnerabilities", [])),
+                # Universal format fields
+                vuln.get("purl"),
+                vuln.get("namespace"),
+                risk_score,
+                json.dumps(vuln.get("cpes", [])),
+                json.dumps(vuln.get("licenses", [])),
+                json.dumps(vuln.get("locations", [])),
+                json.dumps(vuln.get("upstreams", [])),
+                json.dumps(vuln.get("match_details", [])),
             )
         logger.debug(
-            f"Inserted vulnerability {vuln['id']} for image {image_name}:{image_version}"
+            f"Inserted vulnerability {vuln_id} for image {image_name}:{image_version}"
         )
     except asyncpg.PostgresError as e:
         logger.error(f"PSQL error in insert_vulnerability_sca: {e}")
@@ -2360,14 +2399,15 @@ async def insert_vulnerabilities_sca_batch(
     scanner: str,
 ) -> dict:
     """
-    Batch insert multiple VulnerabilitySca records.
+    Batch insert multiple vulnerability records in universal SCA format.
 
     Args:
-        vulns: List of dicts containing vulnerability data matching VulnerabilitySca model
+        vulns: List of dicts containing vulnerability data in universal format
         image_name: Name of the container image
         image_version: Version of the container image
         product: Product ID
         team: Team name
+        scanner: Scanner name (e.g., "grype")
 
     Returns:
         dict structure with 'status' and 'result'
@@ -2377,27 +2417,43 @@ async def insert_vulnerabilities_sca_batch(
     try:
         values = []
         for v in vulns:
+            # Extract severity data from universal format
+            severity = v.get("severity", {})
+            severity_level = severity.get("level", "Unknown")
+            cvss = severity.get("cvss", [])
+            epss = severity.get("epss", [])
+            risk_score = severity.get("risk_score")
+
             values.append(
                 (
                     scanner,
-                    v["id"],
-                    v["source"],
+                    v.get("vuln_id", ""),
+                    v.get("source", ""),
                     image_name,
                     image_version,
                     product,
                     team,
                     v.get("description", ""),
-                    v["severity"]["value"],
+                    severity_level,
                     v.get("affected_component_type", ""),
                     v.get("affected_component", ""),
                     v.get("affected_version", ""),
                     v.get("affected_path", ""),
-                    json.dumps(v["severity"].get("cvss", [])),
-                    json.dumps(v["severity"].get("epss", [])),
+                    json.dumps(cvss),
+                    json.dumps(epss),
                     json.dumps(v.get("urls", [])),
                     json.dumps(v.get("cwes", [])),
                     json.dumps(v.get("fix", {})),
                     json.dumps(v.get("related_vulnerabilities", [])),
+                    # Universal format fields
+                    v.get("purl"),
+                    v.get("namespace"),
+                    risk_score,
+                    json.dumps(v.get("cpes", [])),
+                    json.dumps(v.get("licenses", [])),
+                    json.dumps(v.get("locations", [])),
+                    json.dumps(v.get("upstreams", [])),
+                    json.dumps(v.get("match_details", [])),
                 )
             )
 
@@ -2423,7 +2479,7 @@ async def get_vulnerabilities_sca_by_image(
     team: str,
 ) -> dict:
     """
-    Get all VulnerabilitySca records for an image.
+    Get all vulnerability records for an image in universal SCA format.
 
     Args:
         image_name: Name of the container image
@@ -2468,6 +2524,15 @@ async def get_vulnerabilities_sca_by_image(
                         "cwes": row[12],
                         "fix": row[13],
                         "related_vulnerabilities": row[14],
+                        # Universal format fields
+                        "purl": row[15],
+                        "namespace": row[16],
+                        "risk_score": row[17],
+                        "cpes": row[18],
+                        "licenses": row[19],
+                        "locations": row[20],
+                        "upstreams": row[21],
+                        "match_details": row[22],
                     }
                 )
         logger.debug(
@@ -2484,7 +2549,7 @@ async def get_vulnerabilities_sca_by_image(
 
 async def get_vulnerability_sca_by_id(vuln_id: str, team: str) -> dict:
     """
-    Get VulnerabilitySca records by vulnerability ID within a team.
+    Get vulnerability records by ID within a team in universal SCA format.
 
     Args:
         vuln_id: Vulnerability ID (e.g., CVE-2024-1234)
@@ -2529,6 +2594,15 @@ async def get_vulnerability_sca_by_id(vuln_id: str, team: str) -> dict:
                         "cwes": row[16],
                         "fix": row[17],
                         "related_vulnerabilities": row[18],
+                        # Universal format fields
+                        "purl": row[19],
+                        "namespace": row[20],
+                        "risk_score": row[21],
+                        "cpes": row[22],
+                        "licenses": row[23],
+                        "locations": row[24],
+                        "upstreams": row[25],
+                        "match_details": row[26],
                     }
                 )
         logger.debug(

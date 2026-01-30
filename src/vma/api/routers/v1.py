@@ -373,10 +373,10 @@ async def import_vulnerabilities_sca(
     user_data: dict = Depends(a.validate_api_token),
 ) -> dict:
     """
-    Import VulnerabilitySca records for an image.
+    Import vulnerability records for an image in universal SCA format.
 
-    This endpoint accepts SCA vulnerability data that maps directly to the
-    VulnerabilitySca model, storing it independently from the NVD database.
+    This endpoint accepts SCA vulnerability data in the universal format,
+    storing it independently from the NVD database.
     """
     scanner = helper.validate_input(imp.scanner)
     image_name = helper.validate_input(imp.image_name)
@@ -447,7 +447,7 @@ async def image_vuln_sca(
     """
     Get SCA vulnerabilities for a specific image.
 
-    Returns VulnerabilitySca records stored independently from NVD data.
+    Returns vulnerability records in universal SCA format, stored independently from NVD data.
     """
     team = helper.validate_input(t)
     name = helper.validate_input(n)

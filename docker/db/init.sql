@@ -219,6 +219,16 @@ CREATE TABLE vulnerabilities_sca (
     fix JSONB DEFAULT '{}'::jsonb,
     related_vulnerabilities JSONB DEFAULT '[]'::jsonb,
 
+    -- Universal format fields for comprehensive vulnerability tracking
+    purl TEXT,
+    namespace TEXT,
+    risk_score REAL,
+    cpes JSONB DEFAULT '[]'::jsonb,
+    licenses JSONB DEFAULT '[]'::jsonb,
+    locations JSONB DEFAULT '[]'::jsonb,
+    upstreams JSONB DEFAULT '[]'::jsonb,
+    match_details JSONB DEFAULT '[]'::jsonb,
+
     -- Composite primary key: scanner + vuln + image + artifact
     PRIMARY KEY (scanner, vuln_id, image_name, image_version, product, team, affected_component, affected_version),
 
@@ -228,11 +238,30 @@ CREATE TABLE vulnerabilities_sca (
         ON DELETE CASCADE
 );
 
--- Performance indexes
+-- Performance indexes (base)
 CREATE INDEX idx_vuln_sca_team ON vulnerabilities_sca(team);
 CREATE INDEX idx_vuln_sca_severity ON vulnerabilities_sca(severity_level);
 CREATE INDEX idx_vuln_sca_vuln_id ON vulnerabilities_sca(vuln_id);
 CREATE INDEX idx_vuln_sca_image ON vulnerabilities_sca(image_name, image_version);
+
+-- Performance indexes (universal format fields)
+CREATE INDEX idx_vuln_sca_purl ON vulnerabilities_sca(purl);
+CREATE INDEX idx_vuln_sca_namespace ON vulnerabilities_sca(namespace);
+CREATE INDEX idx_vuln_sca_risk ON vulnerabilities_sca(risk_score DESC NULLS LAST);
+CREATE INDEX idx_vuln_sca_cpes ON vulnerabilities_sca USING GIN (cpes);
+CREATE INDEX idx_vuln_sca_licenses ON vulnerabilities_sca USING GIN (licenses);
+CREATE INDEX idx_vuln_sca_image_risk ON vulnerabilities_sca(image_name, image_version, severity_level, risk_score DESC NULLS LAST);
+
+-- Column documentation
+COMMENT ON TABLE vulnerabilities_sca IS 'SCA vulnerability findings with universal format support (v2 - 2026-01-30)';
+COMMENT ON COLUMN vulnerabilities_sca.purl IS 'Package URL (PURL) - universal package identifier';
+COMMENT ON COLUMN vulnerabilities_sca.namespace IS 'Vulnerability source namespace (e.g., nvd:cpe, alpine:distro:alpine:3.19)';
+COMMENT ON COLUMN vulnerabilities_sca.risk_score IS 'Scanner-calculated composite risk score';
+COMMENT ON COLUMN vulnerabilities_sca.cpes IS 'Array of CPE identifiers for the affected package';
+COMMENT ON COLUMN vulnerabilities_sca.licenses IS 'Array of package license identifiers';
+COMMENT ON COLUMN vulnerabilities_sca.locations IS 'Array of {path, layer_id} objects showing where package is installed';
+COMMENT ON COLUMN vulnerabilities_sca.upstreams IS 'Array of upstream package names';
+COMMENT ON COLUMN vulnerabilities_sca.match_details IS 'Array of match detail objects explaining how vulnerability was matched';
 
 -- Standalone SAST vulnerability storage (Semgrep findings)
 -- Code-level issues linked to products/teams (no image association)

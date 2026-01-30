@@ -1327,12 +1327,35 @@
             </table>
         `;
 
+    // Vulnerability detail card (third level)
+    const vulnDetailCard = createElementWithAttrs('div', '', {
+      class: 'table-card page-section',
+      hidden: true,
+      'data-vuln-detail-card': ''
+    });
+    vulnDetailCard.innerHTML = `
+            <div class="table-header table-header--stacked">
+                <div>
+                    <h2 data-vuln-detail-title>Vulnerability Details</h2>
+                    <p class="table-subtitle" data-vuln-detail-meta></p>
+                </div>
+                <div class="table-header__actions">
+                    <button type="button" class="btn link" data-vuln-back>
+                        <i class="fas fa-arrow-left"></i>
+                        Back to vulnerabilities
+                    </button>
+                </div>
+            </div>
+            <div class="vuln-detail-content" data-vuln-detail-content></div>
+        `;
+
     wrapper.appendChild(toolbar);
     wrapper.appendChild(formCard);
     wrapper.appendChild(deleteCard);
     wrapper.appendChild(compareCard);
     wrapper.appendChild(listCard);
     wrapper.appendChild(detailCard);
+    wrapper.appendChild(vulnDetailCard);
     root.appendChild(wrapper);
 
     return {
@@ -1363,6 +1386,11 @@
       columnToggleBtn: detailCard.querySelector('[data-column-toggle-btn]'),
       columnToggleDropdown: detailCard.querySelector('[data-column-toggle-dropdown]'),
       columnVisibility: loadColumnVisibility() || getDefaultVisibility(),
+      vulnDetailCard,
+      vulnDetailTitle: vulnDetailCard.querySelector('[data-vuln-detail-title]'),
+      vulnDetailMeta: vulnDetailCard.querySelector('[data-vuln-detail-meta]'),
+      vulnDetailContent: vulnDetailCard.querySelector('[data-vuln-detail-content]'),
+      vulnBackButton: vulnDetailCard.querySelector('[data-vuln-back]'),
       deleteForm: deleteCard.querySelector('[data-image-delete-form]'),
       deleteFeedback: deleteCard.querySelector('[data-image-delete-feedback]'),
       deleteProductSelect: deleteCard.querySelector('#image-delete-product'),
@@ -1407,7 +1435,9 @@
       previousView: 'list',
       listSort: loadSortState('list') || { key: 'name', direction: 'asc' },
       detailSort: loadSortState('detail') || { key: 'severity', direction: 'desc' },
-      comparisonSort: loadSortState('comparison') || { key: 'severity', direction: 'desc' }
+      comparisonSort: loadSortState('comparison') || { key: 'severity', direction: 'desc' },
+      currentVuln: null,
+      currentImageMeta: null
     };
   }
 
@@ -1939,6 +1969,369 @@
     renderComparisonColumnToggleDropdown(state);
   }
 
+  function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function renderVulnDetailContent(state, vuln) {
+    const container = state.vulnDetailContent;
+    if (!container) return;
+    container.innerHTML = '';
+
+    // Section 1: Header with severity and EPSS
+    const headerSection = createElementWithAttrs('div', null, { class: 'vuln-detail-section' });
+    const metaRow = createElementWithAttrs('div', null, { class: 'vuln-detail-meta' });
+
+    const level = vuln?.severity_level || '';
+    const sevBadge = createElementWithAttrs('span', level || 'Unknown', {
+      class: `severity-badge ${getSeverityBadgeClass(level)}`
+    });
+    metaRow.appendChild(sevBadge);
+
+    // Risk score if available
+    const riskScore = vuln?.risk_score;
+    if (riskScore !== undefined && riskScore !== null) {
+      const riskBadge = createElementWithAttrs('span', `Risk: ${riskScore}`, {
+        class: 'severity-badge severity-none'
+      });
+      metaRow.appendChild(riskBadge);
+    }
+
+    // EPSS
+    const epssArr = Array.isArray(vuln?.epss) ? vuln.epss : [];
+    if (epssArr.length) {
+      const e = epssArr[0];
+      const score = e?.epss ?? e?.score;
+      if (score !== undefined && score !== null) {
+        const pct = (score * 100).toFixed(2) + '%';
+        const percentile = e?.percentile;
+        const epssText = percentile !== undefined ? `EPSS: ${pct} (P${(percentile * 100).toFixed(1)})` : `EPSS: ${pct}`;
+        const epssBadge = createElementWithAttrs('span', epssText, { class: 'severity-badge severity-none' });
+        metaRow.appendChild(epssBadge);
+      }
+    }
+    headerSection.appendChild(metaRow);
+    container.appendChild(headerSection);
+
+    // Section 2: Package Info
+    const pkgSection = createElementWithAttrs('div', null, { class: 'vuln-detail-section' });
+    pkgSection.innerHTML = '<h4>Package Information</h4>';
+    const pkgGrid = createElementWithAttrs('div', null, { class: 'vuln-detail-grid' });
+
+    const fields = [
+      ['Component', vuln?.affected_component],
+      ['Version', vuln?.affected_version],
+      ['Type', vuln?.affected_component_type],
+      ['Namespace', vuln?.namespace],
+      ['Source', vuln?.source],
+      ['Scanner', vuln?.scanner]
+    ];
+
+    fields.forEach(([label, value]) => {
+      if (value) {
+        const field = createElementWithAttrs('div', null, { class: 'vuln-detail-field' });
+        field.innerHTML = `<strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}`;
+        pkgGrid.appendChild(field);
+      }
+    });
+
+    // PURL with copy button
+    if (vuln?.purl) {
+      const purlField = createElementWithAttrs('div', null, { class: 'vuln-detail-field vuln-detail-field--full' });
+      purlField.innerHTML = `<strong>PURL:</strong>`;
+      const purlDisplay = createElementWithAttrs('div', null, { class: 'purl-display' });
+      const purlCode = createElementWithAttrs('code', vuln.purl);
+      const copyBtn = createElementWithAttrs('button', '', { class: 'btn secondary btn-sm', title: 'Copy PURL' });
+      copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(vuln.purl).then(() => {
+          copyBtn.innerHTML = '<i class="fas fa-check"></i>';
+          setTimeout(() => { copyBtn.innerHTML = '<i class="fas fa-copy"></i>'; }, 1500);
+        });
+      });
+      purlDisplay.appendChild(purlCode);
+      purlDisplay.appendChild(copyBtn);
+      purlField.appendChild(purlDisplay);
+      pkgGrid.appendChild(purlField);
+    }
+
+    // Licenses
+    const licenses = Array.isArray(vuln?.licenses) ? vuln.licenses : [];
+    if (licenses.length) {
+      const licField = createElementWithAttrs('div', null, { class: 'vuln-detail-field' });
+      licField.innerHTML = `<strong>Licenses:</strong> ${escapeHtml(licenses.join(', '))}`;
+      pkgGrid.appendChild(licField);
+    }
+
+    // CPEs
+    const cpes = Array.isArray(vuln?.cpes) ? vuln.cpes : [];
+    if (cpes.length) {
+      const cpeField = createElementWithAttrs('div', null, { class: 'vuln-detail-field vuln-detail-field--full' });
+      cpeField.innerHTML = `<strong>CPEs:</strong>`;
+      const cpeList = createElementWithAttrs('ul', null, { class: 'vuln-detail-list' });
+      cpes.forEach(cpe => {
+        const li = createElementWithAttrs('li');
+        li.innerHTML = `<code>${escapeHtml(cpe)}</code>`;
+        cpeList.appendChild(li);
+      });
+      cpeField.appendChild(cpeList);
+      pkgGrid.appendChild(cpeField);
+    }
+
+    pkgSection.appendChild(pkgGrid);
+    container.appendChild(pkgSection);
+
+    // Section 3: Locations
+    const locations = Array.isArray(vuln?.locations) ? vuln.locations : [];
+    const affectedPath = vuln?.affected_path;
+    if (locations.length || affectedPath) {
+      const locSection = createElementWithAttrs('div', null, { class: 'vuln-detail-section' });
+      locSection.innerHTML = '<h4>Locations</h4>';
+      const locGrid = createElementWithAttrs('div', null, { class: 'vuln-detail-grid' });
+
+      if (affectedPath) {
+        const pathField = createElementWithAttrs('div', null, { class: 'vuln-detail-field vuln-detail-field--full' });
+        pathField.innerHTML = `<strong>Path:</strong> <code>${escapeHtml(affectedPath)}</code>`;
+        locGrid.appendChild(pathField);
+      }
+
+      locations.forEach((loc, idx) => {
+        const locField = createElementWithAttrs('div', null, { class: 'vuln-detail-field vuln-detail-field--full' });
+        let locHtml = `<strong>Location ${idx + 1}:</strong> <code>${escapeHtml(loc.path || '')}</code>`;
+        if (loc.layer_id) {
+          locHtml += `<br><span class="text-muted">Layer: <code>${escapeHtml(loc.layer_id)}</code></span>`;
+        }
+        locField.innerHTML = locHtml;
+        locGrid.appendChild(locField);
+      });
+
+      // Upstreams
+      const upstreams = Array.isArray(vuln?.upstreams) ? vuln.upstreams : [];
+      if (upstreams.length) {
+        const upField = createElementWithAttrs('div', null, { class: 'vuln-detail-field' });
+        upField.innerHTML = `<strong>Upstreams:</strong> ${escapeHtml(upstreams.join(', '))}`;
+        locGrid.appendChild(upField);
+      }
+
+      locSection.appendChild(locGrid);
+      container.appendChild(locSection);
+    }
+
+    // Section 4: CVSS Scores
+    const cvssArr = Array.isArray(vuln?.cvss) ? vuln.cvss : [];
+    if (cvssArr.length) {
+      const cvssSection = createElementWithAttrs('div', null, { class: 'vuln-detail-section' });
+      cvssSection.innerHTML = '<h4>CVSS Scores</h4>';
+      const cvssGrid = createElementWithAttrs('div', null, { class: 'vuln-detail-cvss-list' });
+
+      cvssArr.forEach(entry => {
+        const card = createElementWithAttrs('div', null, { class: 'cvss-detail-card' });
+        const score = entry.metrics?.baseScore ?? entry.score ?? '—';
+        const version = entry.version || '?';
+        const source = entry.source || '';
+        const type = entry.type || '';
+        const vector = entry.vector || entry.metrics?.vectorString || '';
+
+        let cardHtml = `
+          <div class="cvss-detail-header">
+            <span class="cvss-score cvss">${score}</span>
+            <span class="cvss-version">v${version}</span>
+            <span class="cvss-source">${escapeHtml(source)} (${escapeHtml(type)})</span>
+          </div>
+        `;
+
+        if (vector) {
+          cardHtml += `<div class="cvss-detail-vector"><code>${escapeHtml(vector)}</code></div>`;
+        }
+
+        const exploitability = entry.metrics?.exploitabilityScore ?? entry.exploitability_score;
+        const impact = entry.metrics?.impactScore ?? entry.impact_score;
+        if (exploitability !== undefined || impact !== undefined) {
+          cardHtml += '<div class="cvss-detail-subscores">';
+          if (exploitability !== undefined) {
+            cardHtml += `<span>Exploitability: ${exploitability}</span>`;
+          }
+          if (impact !== undefined) {
+            cardHtml += `<span>Impact: ${impact}</span>`;
+          }
+          cardHtml += '</div>';
+        }
+
+        card.innerHTML = cardHtml;
+        cvssGrid.appendChild(card);
+      });
+
+      cvssSection.appendChild(cvssGrid);
+      container.appendChild(cvssSection);
+    }
+
+    // Section 5: Fix Information
+    const fix = vuln?.fix;
+    if (fix && (fix.versions?.length || fix.state || fix.suggested_version)) {
+      const fixSection = createElementWithAttrs('div', null, { class: 'vuln-detail-section' });
+      fixSection.innerHTML = '<h4>Fix Information</h4>';
+      const fixGrid = createElementWithAttrs('div', null, { class: 'vuln-detail-grid' });
+
+      if (fix.state) {
+        const stateClass = fix.state === 'fixed' ? 'severity-low' : (fix.state === 'wontfix' ? 'severity-medium' : 'severity-none');
+        const stateField = createElementWithAttrs('div', null, { class: 'vuln-detail-field' });
+        stateField.innerHTML = `<strong>State:</strong> <span class="severity-badge ${stateClass}">${escapeHtml(fix.state)}</span>`;
+        fixGrid.appendChild(stateField);
+      }
+
+      if (fix.suggested_version) {
+        const sugField = createElementWithAttrs('div', null, { class: 'vuln-detail-field' });
+        sugField.innerHTML = `<strong>Suggested Version:</strong> <code>${escapeHtml(fix.suggested_version)}</code>`;
+        fixGrid.appendChild(sugField);
+      }
+
+      const fixVersions = Array.isArray(fix.versions) ? fix.versions : [];
+      if (fixVersions.length) {
+        const versField = createElementWithAttrs('div', null, { class: 'vuln-detail-field' });
+        versField.innerHTML = `<strong>Fix Versions:</strong> ${fixVersions.map(v => `<code>${escapeHtml(v)}</code>`).join(', ')}`;
+        fixGrid.appendChild(versField);
+      }
+
+      fixSection.appendChild(fixGrid);
+      container.appendChild(fixSection);
+    }
+
+    // Section 6: Match Details
+    const matchDetails = Array.isArray(vuln?.match_details) ? vuln.match_details : [];
+    if (matchDetails.length) {
+      const matchSection = createElementWithAttrs('div', null, { class: 'vuln-detail-section' });
+      matchSection.innerHTML = '<h4>Match Details</h4>';
+      const matchGrid = createElementWithAttrs('div', null, { class: 'vuln-detail-match-list' });
+
+      matchDetails.forEach((match, idx) => {
+        const card = createElementWithAttrs('div', null, { class: 'match-detail-card' });
+        let cardHtml = `<div class="match-detail-header"><strong>Match ${idx + 1}:</strong> <code>${escapeHtml(match.type || 'unknown')}</code></div>`;
+
+        if (match.matcher) {
+          cardHtml += `<div class="match-detail-field">Matcher: ${escapeHtml(match.matcher)}</div>`;
+        }
+        if (match.confidence) {
+          cardHtml += `<div class="match-detail-field">Confidence: ${escapeHtml(match.confidence)}</div>`;
+        }
+        if (match.searched_by) {
+          cardHtml += `<div class="match-detail-field">Searched by: <code>${escapeHtml(JSON.stringify(match.searched_by))}</code></div>`;
+        }
+        if (match.found) {
+          cardHtml += `<div class="match-detail-field">Found: <code>${escapeHtml(JSON.stringify(match.found))}</code></div>`;
+        }
+
+        card.innerHTML = cardHtml;
+        matchGrid.appendChild(card);
+      });
+
+      matchSection.appendChild(matchGrid);
+      container.appendChild(matchSection);
+    }
+
+    // Section 7: CWEs and References
+    const cwes = Array.isArray(vuln?.cwes) ? vuln.cwes : [];
+    const urls = Array.isArray(vuln?.urls) ? vuln.urls : [];
+    const related = Array.isArray(vuln?.related_vulnerabilities) ? vuln.related_vulnerabilities : [];
+
+    if (cwes.length || urls.length || related.length) {
+      const refSection = createElementWithAttrs('div', null, { class: 'vuln-detail-section' });
+      refSection.innerHTML = '<h4>References & Classification</h4>';
+      const refGrid = createElementWithAttrs('div', null, { class: 'vuln-detail-grid' });
+
+      if (cwes.length) {
+        const cweField = createElementWithAttrs('div', null, { class: 'vuln-detail-field vuln-detail-field--full' });
+        cweField.innerHTML = '<strong>CWEs:</strong>';
+        const cweList = createElementWithAttrs('div', null, { class: 'vuln-detail-tags' });
+        cwes.forEach(cwe => {
+          const id = typeof cwe === 'string' ? cwe : (cwe.cwe || cwe.id || cwe.cweId || '');
+          const name = cwe.name || '';
+          const tag = createElementWithAttrs('span', name ? `${id} - ${name}` : id, { class: 'cwe-badge' });
+          cweList.appendChild(tag);
+        });
+        cweField.appendChild(cweList);
+        refGrid.appendChild(cweField);
+      }
+
+      if (related.length) {
+        const relField = createElementWithAttrs('div', null, { class: 'vuln-detail-field vuln-detail-field--full' });
+        relField.innerHTML = `<strong>Related Vulnerabilities:</strong> ${related.map(r => {
+          const id = typeof r === 'string' ? r : (r.id || '');
+          return `<code>${escapeHtml(id)}</code>`;
+        }).join(', ')}`;
+        refGrid.appendChild(relField);
+      }
+
+      if (urls.length) {
+        const urlField = createElementWithAttrs('div', null, { class: 'vuln-detail-field vuln-detail-field--full' });
+        urlField.innerHTML = '<strong>References:</strong>';
+        const urlList = createElementWithAttrs('ul', null, { class: 'vuln-detail-refs' });
+        urls.forEach(url => {
+          const li = createElementWithAttrs('li');
+          const a = createElementWithAttrs('a', truncate(url, 80), { href: url, target: '_blank', rel: 'noopener noreferrer' });
+          li.appendChild(a);
+          urlList.appendChild(li);
+        });
+        urlField.appendChild(urlList);
+        refGrid.appendChild(urlField);
+      }
+
+      refSection.appendChild(refGrid);
+      container.appendChild(refSection);
+    }
+
+    // Section 8: Description
+    if (vuln?.description) {
+      const descSection = createElementWithAttrs('div', null, { class: 'vuln-detail-section' });
+      descSection.innerHTML = '<h4>Description</h4>';
+      const descField = createElementWithAttrs('div', null, { class: 'vuln-detail-description' });
+      descField.innerHTML = `<p>${escapeHtml(vuln.description)}</p>`;
+      descSection.appendChild(descField);
+      container.appendChild(descSection);
+    }
+  }
+
+  function showVulnDetail(state, vuln) {
+    state.currentVuln = vuln;
+    state.view = 'vuln-detail';
+
+    if (state.detailCard) state.detailCard.hidden = true;
+    if (state.vulnDetailCard) state.vulnDetailCard.hidden = false;
+
+    const vulnId = vuln?.vuln_id || 'Unknown';
+    if (state.vulnDetailTitle) {
+      state.vulnDetailTitle.textContent = vulnId;
+    }
+    if (state.vulnDetailMeta) {
+      const parts = [];
+      if (vuln?.severity_level) parts.push(vuln.severity_level);
+      if (vuln?.affected_component) parts.push(vuln.affected_component);
+      if (vuln?.affected_version) parts.push(`v${vuln.affected_version}`);
+      state.vulnDetailMeta.textContent = parts.join(' · ');
+    }
+
+    setPageTitle?.(`Images · ${vulnId}`);
+    renderVulnDetailContent(state, vuln);
+  }
+
+  function backToVulnTable(state) {
+    state.currentVuln = null;
+    state.view = 'detail';
+
+    if (state.vulnDetailCard) state.vulnDetailCard.hidden = true;
+    if (state.detailCard) state.detailCard.hidden = false;
+    if (state.vulnDetailContent) state.vulnDetailContent.innerHTML = '';
+
+    const meta = state.currentImageMeta;
+    if (meta) {
+      setPageTitle?.(`Images · ${meta.name} ${meta.version}`);
+    } else {
+      setPageTitle?.('Images');
+    }
+  }
+
   function renderVulnerabilityRows(state, items) {
     const { detailRows } = state;
     if (!detailRows) {
@@ -1954,6 +2347,8 @@
     detailRows.innerHTML = '';
     items.forEach(item => {
       const row = document.createElement('tr');
+      row.style.cursor = 'pointer';
+
       visCols.forEach(col => {
         if (col.key === 'cvss') {
           const cvssArr = Array.isArray(item?.cvss) ? item.cvss : [];
@@ -2010,6 +2405,11 @@
           row.appendChild(createElementWithAttrs('td', text || '—'));
         }
       });
+
+      row.addEventListener('click', () => {
+        showVulnDetail(state, item);
+      });
+
       detailRows.appendChild(row);
     });
   }
@@ -2079,6 +2479,7 @@
 
   async function showImageDetails(state, imageMeta) {
     const { detailFeedback, detailSearchInput } = state;
+    state.currentImageMeta = imageMeta;
     switchToDetailView(state, imageMeta);
 
     if (detailFeedback) {
@@ -2105,6 +2506,7 @@
       return;
     }
     imageMeta.team = team;
+    state.currentImageMeta = imageMeta;
 
     try {
       const endpoint = `/image/${encodeURIComponent(team)}/${encodeURIComponent(imageMeta.product)}/${encodeURIComponent(imageMeta.name)}/${encodeURIComponent(imageMeta.version)}/vuln-sca`;
@@ -2356,6 +2758,12 @@
     if (state.detailBackButton) {
       state.detailBackButton.addEventListener('click', () => {
         switchToListView(state);
+      });
+    }
+
+    if (state.vulnBackButton) {
+      state.vulnBackButton.addEventListener('click', () => {
+        backToVulnTable(state);
       });
     }
 

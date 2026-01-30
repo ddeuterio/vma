@@ -4,122 +4,229 @@ from loguru import logger
 from datetime import datetime
 
 
+def _parse_cvss_scores(cvss_list: list) -> list:
+    """Parse CVSS scores from Grype format to universal format."""
+    parsed = []
+    for cvss in cvss_list:
+        if not isinstance(cvss, dict):
+            continue
+        metrics = cvss.get("metrics", {})
+        parsed.append({
+            "source": cvss.get("source", ""),
+            "type": cvss.get("type", ""),
+            "version": cvss.get("version", ""),
+            "vector": cvss.get("vector", ""),
+            "base_score": metrics.get("baseScore", 0.0),
+            "exploitability_score": metrics.get("exploitabilityScore"),
+            "impact_score": metrics.get("impactScore"),
+        })
+    return parsed
+
+
+def _parse_epss_scores(epss_list: list) -> list:
+    """Parse EPSS scores from Grype format to universal format."""
+    parsed = []
+    for epss in epss_list:
+        if not isinstance(epss, dict):
+            continue
+        parsed.append({
+            "cve": epss.get("cve", ""),
+            "epss": epss.get("epss", 0.0),
+            "percentile": epss.get("percentile", 0.0),
+            "date": epss.get("date", ""),
+        })
+    return parsed
+
+
+def _parse_cwes(cwe_list: list) -> list:
+    """Parse CWE entries from Grype format to universal format."""
+    parsed = []
+    for cwe in cwe_list:
+        if not isinstance(cwe, dict):
+            continue
+        parsed.append({
+            "cwe": cwe.get("cwe", ""),
+            "source": cwe.get("source"),
+            "type": cwe.get("type", "Primary"),
+        })
+    return parsed
+
+
+def _parse_fix_info(fix_data: dict, match_details: list) -> dict:
+    """Parse fix information, including suggested version from match details."""
+    if not isinstance(fix_data, dict):
+        return {"versions": [], "state": "", "suggested_version": None}
+
+    # Look for suggested version in match details
+    suggested_version = None
+    for match in match_details:
+        if isinstance(match, dict) and "fix" in match:
+            suggested = match.get("fix", {}).get("suggestedVersion")
+            if suggested:
+                suggested_version = suggested
+                break
+
+    return {
+        "versions": fix_data.get("versions", []),
+        "state": fix_data.get("state", ""),
+        "suggested_version": suggested_version,
+    }
+
+
+def _parse_locations(locations_list: list) -> tuple[str, list]:
+    """Parse artifact locations, extracting both legacy path string and detailed locations.
+
+    Returns:
+        Tuple of (legacy_path_string, detailed_locations_list)
+    """
+    legacy_paths = []
+    detailed = []
+
+    for loc in locations_list:
+        if not isinstance(loc, dict):
+            continue
+        path = loc.get("path", "")
+        if path:
+            legacy_paths.append(path)
+        detailed.append({
+            "path": path,
+            "layer_id": loc.get("layerID"),
+        })
+
+    return ",".join(legacy_paths), detailed
+
+
+def _parse_match_details(match_details_list: list) -> list:
+    """Parse match details from Grype format."""
+    parsed = []
+    for match in match_details_list:
+        if not isinstance(match, dict):
+            continue
+        parsed.append({
+            "type": match.get("type", ""),
+            "matcher": match.get("matcher"),
+            "confidence": match.get("confidence"),
+            "searched_by": match.get("searchedBy"),
+            "found": match.get("found"),
+        })
+    return parsed
+
+
+def _parse_upstreams(upstreams_list: list) -> list:
+    """Extract upstream package names."""
+    names = []
+    for upstream in upstreams_list:
+        if isinstance(upstream, dict):
+            name = upstream.get("name")
+            if name:
+                names.append(name)
+        elif isinstance(upstream, str):
+            names.append(upstream)
+    return names
+
+
+def _parse_related_vulnerabilities(related_list: list) -> list:
+    """Extract related vulnerability IDs."""
+    ids = []
+    for related in related_list:
+        if isinstance(related, dict):
+            vid = related.get("id")
+            if vid:
+                ids.append(vid)
+        elif isinstance(related, str):
+            ids.append(related)
+    return ids
+
+
 async def grype_parser(path: str) -> list:
-    pass
+    """Parse Grype JSON output into universal SCA vulnerability format.
+
+    Extracts all available fields from Grype including:
+    - Core vulnerability data (ID, severity, description, CVSS, EPSS)
+    - Artifact details (name, version, type, PURL, CPEs, licenses)
+    - Location info (paths and container layer IDs)
+    - Match context (how the vulnerability was matched)
+    - Fix information (available versions, suggested fixes)
+
+    Args:
+        path: Path to the Grype JSON report file
+
+    Returns:
+        List of vulnerability dicts in universal format
+    """
     json_data = None
     async with aiofiles.open(path, "r") as f:
         content = await f.read()
         json_data = json.loads(content)
 
     ret = []
-    for vuln in json_data["matches"]:
-        vuln_sca = {}
-        severity = (
-            vuln["vulnerability"]["severity"]
-            if "severity" in vuln["vulnerability"]
-            else ""
-        )
-        cvss = vuln["vulnerability"]["cvss"] if "cvss" in vuln["vulnerability"] else []
-        epss = vuln["vulnerability"]["epss"] if "epss" in vuln["vulnerability"] else []
-        vuln_sca["severity"] = {"value": severity, "cvss": cvss, "epss": epss}
-        vuln_sca["id"] = (
-            vuln["vulnerability"]["id"] if "id" in vuln["vulnerability"] else ""
-        )
-        vuln_sca["source"] = (
-            vuln["vulnerability"]["dataSource"]
-            if "dataSource" in vuln["vulnerability"]
-            else ""
-        )
-        vuln_sca["urls"] = (
-            vuln["vulnerability"]["urls"] if "urls" in vuln["vulnerability"] else []
-        )
-        vuln_sca["description"] = (
-            vuln["vulnerability"]["description"]
-            if "description" in vuln["vulnerability"]
-            else ""
-        )
-        vuln_sca["cwes"] = (
-            vuln["vulnerability"]["cwes"] if "cwes" in vuln["vulnerability"] else [{}]
-        )
-        vuln_sca["fix"] = (
-            vuln["vulnerability"]["fix"] if "fix" in vuln["vulnerability"] else {}
-        )
-        vuln_sca["related_vulnerabilities"] = (
-            vuln["relatedVulnerabilities"]
-            if "relatedVulnerabilities" in vuln["vulnerability"]
-            else []
-        )
+    for match in json_data.get("matches", []):
+        vuln = match.get("vulnerability", {})
+        artifact = match.get("artifact", {})
+        match_details_raw = match.get("matchDetails", [])
 
-        # Extract artifact data
-        vuln_sca["affected_component_type"] = (
-            vuln["artifact"]["type"] if "type" in vuln["artifact"] else ""
-        )
-        vuln_sca["affected_component"] = (
-            vuln["artifact"]["name"] if "name" in vuln["artifact"] else ""
-        )
-        vuln_sca["affected_version"] = (
-            vuln["artifact"]["version"] if "version" in vuln["artifact"] else ""
-        )
-        locations = ""
-        if "locations" in vuln["artifact"]:
-            for loc in vuln["artifact"]["locations"]:
-                locations += f"{loc['path']},"
-            locations = locations[:-1] if locations else ""
-        vuln_sca["affected_path"] = locations
+        # Parse severity components
+        cvss_scores = _parse_cvss_scores(vuln.get("cvss", []))
+        epss_scores = _parse_epss_scores(vuln.get("epss", []))
+        risk_score = vuln.get("risk")
+
+        # Parse locations (both legacy format and detailed)
+        legacy_path, detailed_locations = _parse_locations(artifact.get("locations", []))
+
+        # Parse match details (needed for suggested fix version)
+        match_details = _parse_match_details(match_details_raw)
+
+        # Build universal vulnerability dict
+        vuln_sca = {
+            # Identification
+            "vuln_id": vuln.get("id", ""),
+            "source": vuln.get("dataSource", ""),
+            "namespace": vuln.get("namespace"),
+
+            # Core vulnerability data
+            "description": vuln.get("description", ""),
+            "severity": {
+                "level": vuln.get("severity", "Unknown"),
+                "cvss": cvss_scores,
+                "epss": epss_scores,
+                "risk_score": risk_score,
+            },
+            "urls": vuln.get("urls", []),
+            "cwes": _parse_cwes(vuln.get("cwes", [])),
+
+            # Artifact information
+            "affected_component": artifact.get("name", ""),
+            "affected_version": artifact.get("version", ""),
+            "affected_component_type": artifact.get("type", ""),
+            "affected_path": legacy_path,
+            "purl": artifact.get("purl"),
+            "cpes": artifact.get("cpes", []),
+            "licenses": artifact.get("licenses", []),
+            "locations": detailed_locations,
+            "upstreams": _parse_upstreams(artifact.get("upstreams", [])),
+
+            # Fix & match context
+            "fix": _parse_fix_info(vuln.get("fix", {}), match_details_raw),
+            "match_details": match_details,
+            "related_vulnerabilities": _parse_related_vulnerabilities(
+                match.get("relatedVulnerabilities", [])
+            ),
+        }
 
         ret.append(vuln_sca)
-    logger.debug(f"A total of {len(ret)} CVEs has been identified when parsing")
-    return ret
 
-
-async def grype_parse_report(metadata, path):
-    """
-    Only supports json type atm
-    Args:
-        path: path to the json grype report
-    Returns:
-        [] List with the values to be inserted in to the db except for the product, the image name and the image version
-    """
-    json_data = None
-    async with aiofiles.open(path, "r") as f:
-        content = await f.read()
-        json_data = json.loads(content)
-
-    ret = []
-    for vuln in json_data["matches"]:
-        v_data = []
-        for val in metadata:
-            v_data.append(val)
-        v_data.append(vuln["vulnerability"]["id"])
-
-        fix_versions = ""
-        for ver in vuln["vulnerability"]["fix"]["versions"]:
-            fix_versions += f"{ver},"
-        v_data.append(fix_versions[:-1])
-
-        now = datetime.now().astimezone().isoformat()
-        v_data.append(now)  # first seen is now
-        v_data.append(now)  # last seen is now
-
-        v_data.append(vuln["artifact"]["type"])
-        v_data.append(vuln["artifact"]["name"])
-        v_data.append(vuln["artifact"]["version"])
-
-        locations = ""
-        for loc in vuln["artifact"]["locations"]:
-            locations += f"{loc['path']},"
-        v_data.append(locations[:-1])
-        ret.append(v_data)
-    logger.debug(f"A total of {len(ret)} CVEs has been identified when parsing")
+    logger.debug(f"Parsed {len(ret)} SCA vulnerabilities from Grype report")
     return ret
 
 
 async def grype_get_image_metadata(path):
-    """
+    """Extract image metadata from Grype report.
+
     Args:
-        path: path to the json grype report
+        path: Path to the JSON grype report
+
     Returns:
-        [image_name, image_version]
+        [image_name, image_version] or distro info if available
     """
     json_data = None
 
@@ -134,7 +241,7 @@ async def grype_get_image_metadata(path):
 
 
 async def xray_parse_report(metadata, path):
-    # TODO add the metadata
+    """Parse JFrog Xray report format."""
     async with aiofiles.open(path, "r") as f:
         content = await f.read()
         data = json.loads(content)
@@ -202,11 +309,10 @@ def _parse_semgrep_cwes(raw_cwes: list) -> list:
 
 
 async def semgrep_parser(path: str) -> list:
-    """
-    Parse Semgrep JSON output into a list of finding dicts.
+    """Parse Semgrep JSON output into a list of finding dicts.
 
     Args:
-        path: path to the Semgrep JSON report
+        path: Path to the Semgrep JSON report
 
     Returns:
         List of finding dicts ready for DB insertion
