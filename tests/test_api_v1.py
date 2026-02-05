@@ -124,6 +124,154 @@ class TestProductEndpoints:
 
             assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
+
+class TestRepoEndpoints:
+    """Tests for repository endpoints"""
+
+    @pytest.mark.asyncio
+    async def test_create_repo_write_success(self, client, regular_user_token):
+        async def override_validate_token():
+            return regular_user_token
+
+        api_server.dependency_overrides[a.validate_access_token] = override_validate_token
+
+        with patch("vma.api.routers.v1.c") as mock_c, \
+             patch("vma.api.routers.v1.helper") as mock_helper:
+
+            mock_helper.validate_input.side_effect = lambda x: x
+            mock_c.insert_repository = AsyncMock(return_value={
+                "status": True,
+                "result": {"name": "repo1"}
+            })
+
+            response = await client.post(
+                "/api/v1/repo",
+                json={
+                    "product": "prod1",
+                    "team": "team1",
+                    "name": "repo1",
+                    "url": "https://example.com/repo1"
+                },
+                headers={"Authorization": "Bearer fake_token"}
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            mock_c.insert_repository.assert_called_once_with(
+                product="prod1",
+                team="team1",
+                name="repo1",
+                url="https://example.com/repo1"
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_repo_by_team_success(self, client, regular_user_token):
+        async def override_validate_token():
+            return regular_user_token
+
+        api_server.dependency_overrides[a.validate_access_token] = override_validate_token
+
+        with patch("vma.api.routers.v1.c") as mock_c, \
+             patch("vma.api.routers.v1.helper") as mock_helper:
+
+            mock_helper.validate_input.side_effect = lambda x: x
+            mock_c.get_repositories = AsyncMock(return_value={
+                "status": True,
+                "result": [
+                    {
+                        "product": "prod1",
+                        "team": "team1",
+                        "name": "repo1",
+                        "url": "https://example.com/repo1"
+                    }
+                ]
+            })
+
+            response = await client.get(
+                "/api/v1/repo/team1",
+                headers={"Authorization": "Bearer fake_token"}
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            mock_c.get_repositories.assert_called_once_with(teams=["team1"])
+
+    @pytest.mark.asyncio
+    async def test_get_repo_by_product_success(self, client, regular_user_token):
+        async def override_validate_token():
+            return regular_user_token
+
+        api_server.dependency_overrides[a.validate_access_token] = override_validate_token
+
+        with patch("vma.api.routers.v1.c") as mock_c, \
+             patch("vma.api.routers.v1.helper") as mock_helper:
+
+            mock_helper.validate_input.side_effect = lambda x: x
+            mock_c.get_repositories = AsyncMock(return_value={
+                "status": True,
+                "result": []
+            })
+
+            response = await client.get(
+                "/api/v1/repo/team1/prod1",
+                headers={"Authorization": "Bearer fake_token"}
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            mock_c.get_repositories.assert_called_once_with(
+                teams=["team1"], product="prod1"
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_repo_by_name_success(self, client, regular_user_token):
+        async def override_validate_token():
+            return regular_user_token
+
+        api_server.dependency_overrides[a.validate_access_token] = override_validate_token
+
+        with patch("vma.api.routers.v1.c") as mock_c, \
+             patch("vma.api.routers.v1.helper") as mock_helper:
+
+            mock_helper.validate_input.side_effect = lambda x: x
+            mock_c.get_repositories = AsyncMock(return_value={
+                "status": True,
+                "result": []
+            })
+
+            response = await client.get(
+                "/api/v1/repo/team1/prod1/repo1",
+                headers={"Authorization": "Bearer fake_token"}
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            mock_c.get_repositories.assert_called_once_with(
+                teams=["team1"], product="prod1", name="repo1"
+            )
+
+    @pytest.mark.asyncio
+    async def test_delete_repo_admin_success(self, client, admin_user_token):
+        async def override_validate_token():
+            return admin_user_token
+
+        api_server.dependency_overrides[a.validate_access_token] = override_validate_token
+
+        with patch("vma.api.routers.v1.c") as mock_c, \
+             patch("vma.api.routers.v1.helper") as mock_helper:
+
+            mock_helper.validate_input.side_effect = lambda x: x
+            mock_c.delete_repository = AsyncMock(return_value={
+                "status": True,
+                "result": {"deleted_rows": 1}
+            })
+
+            response = await client.delete(
+                "/api/v1/repo/team1/prod1/repo1",
+                headers={"Authorization": "Bearer fake_token"}
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            mock_c.delete_repository.assert_called_once_with(
+                team="team1", product="prod1", name="repo1"
+            )
+
     @pytest.mark.asyncio
     async def test_post_product_success(self, client, regular_user_token):
         """Test POST /api/v1/product - success case"""
@@ -167,12 +315,9 @@ class TestProductEndpoints:
                 "result": {"deleted_rows": 1}
             })
 
-            import json
-            response = await client.request(
-                "DELETE",
-                "/api/v1/product",
-                content=json.dumps({"name": "prod1", "team": "team1"}),
-                headers={"Authorization": "Bearer fake_token", "Content-Type": "application/json"}
+            response = await client.delete(
+                "/api/v1/product/team1/prod1",
+                headers={"Authorization": "Bearer fake_token"}
             )
 
             assert response.status_code == status.HTTP_200_OK
@@ -190,12 +335,9 @@ class TestProductEndpoints:
             mock_helper.validate_input.side_effect = lambda x: x
             mock_helper.errors = {"401": "user is not authorized to perform this action"}
 
-            import json
-            response = await client.request(
-                "DELETE",
-                "/api/v1/product",
-                content=json.dumps({"name": "prod1", "team": "team1"}),
-                headers={"Authorization": "Bearer fake_token", "Content-Type": "application/json"}
+            response = await client.delete(
+                "/api/v1/product/team1/prod1",
+                headers={"Authorization": "Bearer fake_token"}
             )
 
             assert response.status_code == status.HTTP_401_UNAUTHORIZED

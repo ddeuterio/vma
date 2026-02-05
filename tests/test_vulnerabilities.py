@@ -203,24 +203,20 @@ class TestImageVulnerabilities:
              patch("vma.api.routers.v1.helper") as mock_helper:
 
             mock_helper.validate_input.side_effect = lambda x: x
-            mock_helper.format_vulnerability_rows.return_value = [
-                {
-                    "cve": "CVE-2023-1234",
-                    "component": "libssl",
-                    "component_version": "1.0.0",
-                    "cvss": {"score": 7.5, "severity": "HIGH"}
-                }
-            ]
-            mock_c.get_image_vulnerabilities = AsyncMock(return_value={
+            mock_c.get_vulnerabilities_sca_by_image = AsyncMock(return_value={
                 "status": True,
                 "result": [
-                    ("CVE-2023-1234", "1.2.3", "deb", "libssl", "1.0.0", "/usr/lib",
-                     datetime.now(), datetime.now(), 7.5, "HIGH", "3.1")
+                    {
+                        "vuln_id": "CVE-2023-1234",
+                        "affected_component": "libssl",
+                        "affected_version": "1.0.0",
+                        "severity": {"level": "HIGH"}
+                    }
                 ]
             })
 
             response = await client.get(
-                "/api/v1/image/team1/prod1/app/1.0/vuln",
+                "/api/v1/image/team1/prod1/app/1.0/vuln-sca",
                 headers={"Authorization": "Bearer fake_token"}
             )
 
@@ -241,7 +237,7 @@ class TestImageVulnerabilities:
             mock_helper.errors = {"401": "user is not authorized to perform this action"}
 
             response = await client.get(
-                "/api/v1/image/team2/prod1/app/1.0/vuln",
+                "/api/v1/image/team2/prod1/app/1.0/vuln-sca",
                 headers={"Authorization": "Bearer fake_token"}
             )
 
@@ -260,7 +256,7 @@ class TestImageVulnerabilities:
             mock_helper.errors = {"400": "One or several parameters are missing or malformed"}
 
             response = await client.get(
-                "/api/v1/image/team1/prod1//1.0/vuln",
+                "/api/v1/image/team1/prod1//1.0/vuln-sca",
                 headers={"Authorization": "Bearer fake_token"}
             )
 
@@ -421,33 +417,37 @@ class TestVulnerabilityImport:
 
         mock_c = mock_router_dependencies["connector"]
 
-        mock_c.get_images = AsyncMock(return_value={"status": False})
+        mock_c.get_images = AsyncMock(return_value={"status": True, "result": []})
         mock_c.insert_image = AsyncMock(return_value={"status": True})
-        mock_c.insert_image_vulnerabilities = AsyncMock(return_value={
+        mock_c.insert_vulnerabilities_sca_batch = AsyncMock(return_value={
             "status": True,
             "result": "2 vulnerabilities imported"
         })
 
-        vuln_data = [
-            ["grype", "app", "1.0", "prod1", "team1", "CVE-2023-1234",
-             "1.2.3", "2023-01-01", "2023-01-01", "deb", "libssl", "1.0.0", "/usr/lib"]
-        ]
-
         response = await client.post(
-            "/api/v1/import",
+            "/api/v1/import/sca",
             json={
                 "scanner": "grype",
+                "image_name": "app",
+                "image_version": "1.0",
                 "product": "prod1",
-                "image": "app",
-                "version": "1.0",
                 "team": "team1",
-                "data": vuln_data
+                "vulnerabilities": [
+                    {
+                        "vuln_id": "CVE-2023-1234",
+                        "affected_component": "libssl",
+                        "affected_version": "1.0.0",
+                        "affected_component_type": "deb",
+                        "affected_path": "/usr/lib",
+                        "severity": {"level": "HIGH"}
+                    }
+                ]
             },
             headers={"Authorization": f"Bearer {mock_token}"}
         )
 
         assert response.status_code == status.HTTP_200_OK
-        mock_c.insert_image_vulnerabilities.assert_called_once_with(vuln_data)
+        mock_c.insert_vulnerabilities_sca_batch.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_import_creates_image_if_not_exists(self, client, mock_router_dependencies):
@@ -472,27 +472,31 @@ class TestVulnerabilityImport:
         mock_c = mock_router_dependencies["connector"]
 
         # Image doesn't exist
-        mock_c.get_images = AsyncMock(return_value={"status": False})
+        mock_c.get_images = AsyncMock(return_value={"status": True, "result": []})
         mock_c.insert_image = AsyncMock(return_value={"status": True})
-        mock_c.insert_image_vulnerabilities = AsyncMock(return_value={
+        mock_c.insert_vulnerabilities_sca_batch = AsyncMock(return_value={
             "status": True,
             "result": "Imported"
         })
 
-        vuln_data = [
-            ["grype", "new_app", "1.0", "prod1", "team1", "CVE-2023-9999",
-             "", "2023-01-01", "2023-01-01", "npm", "express", "4.0.0", "/app/node_modules"]
-        ]
-
         response = await client.post(
-            "/api/v1/import",
+            "/api/v1/import/sca",
             json={
                 "scanner": "grype",
+                "image_name": "new_app",
+                "image_version": "1.0",
                 "product": "prod1",
-                "image": "new_app",
-                "version": "1.0",
                 "team": "team1",
-                "data": vuln_data
+                "vulnerabilities": [
+                    {
+                        "vuln_id": "CVE-2023-9999",
+                        "affected_component": "express",
+                        "affected_version": "4.0.0",
+                        "affected_component_type": "npm",
+                        "affected_path": "/app/node_modules",
+                        "severity": {"level": "HIGH"}
+                    }
+                ]
             },
             headers={"Authorization": f"Bearer {mock_token}"}
         )
@@ -528,14 +532,14 @@ class TestVulnerabilityImport:
             mock_helper.errors = {"401": "user is not authorized to perform this action"}
 
             response = await client.post(
-                "/api/v1/import",
+                "/api/v1/import/sca",
                 json={
                     "scanner": "grype",
+                    "image_name": "app",
+                    "image_version": "1.0",
                     "product": "prod1",
-                    "image": "app",
-                    "version": "1.0",
                     "team": "team2",  # Different team
-                    "data": []
+                    "vulnerabilities": []
                 },
                 headers={"Authorization": f"Bearer {mock_token}"}
             )
@@ -567,14 +571,14 @@ class TestVulnerabilityImport:
         mock_helper.errors = mock_helper_errors
 
         response = await client.post(
-            "/api/v1/import",
+            "/api/v1/import/sca",
             json={
                 "scanner": "grype",
+                "image_name": "app",
+                "image_version": "1.0",
                 "product": "",
-                "image": "app",
-                "version": "1.0",
                 "team": "team1",
-                "data": []
+                "vulnerabilities": []
             },
             headers={"Authorization": f"Bearer {mock_token}"}
         )
@@ -602,23 +606,17 @@ class TestGrypeParser:
         report_file = tmp_path / "grype_report.json"
         report_file.write_text(json.dumps(sample_grype_report))
 
-        metadata = ["grype", "app", "1.0", "prod1", "team1"]
-        vulnerabilities = await parser.grype_parse_report(metadata, str(report_file))
+        vulnerabilities = await parser.grype_parser(str(report_file))
 
         assert len(vulnerabilities) == 2
 
         # Check first vulnerability
         vuln1 = vulnerabilities[0]
-        assert vuln1[0] == "grype"  # scanner
-        assert vuln1[1] == "app"    # image name
-        assert vuln1[2] == "1.0"    # version
-        assert vuln1[3] == "prod1"  # product
-        assert vuln1[4] == "team1"  # team
-        assert vuln1[5] == "CVE-2023-1234"  # CVE ID
-        assert vuln1[6] == "1.2.3,1.2.4"  # fix versions
-        assert vuln1[9] == "deb"  # component type
-        assert vuln1[10] == "libssl"  # component name
-        assert vuln1[11] == "1.0.0"  # component version
+        assert vuln1["vuln_id"] == "CVE-2023-1234"  # CVE ID
+        assert vuln1["fix"]["versions"] == ["1.2.3", "1.2.4"]
+        assert vuln1["affected_component_type"] == "deb"
+        assert vuln1["affected_component"] == "libssl"
+        assert vuln1["affected_version"] == "1.0.0"
 
     @pytest.mark.asyncio
     async def test_grype_parse_report_no_fix_versions(self, tmp_path):
@@ -644,12 +642,11 @@ class TestGrypeParser:
         report_file = tmp_path / "grype_report.json"
         report_file.write_text(json.dumps(report))
 
-        metadata = ["grype", "app", "1.0", "prod1", "team1"]
-        vulnerabilities = await parser.grype_parse_report(metadata, str(report_file))
+        vulnerabilities = await parser.grype_parser(str(report_file))
 
         assert len(vulnerabilities) == 1
         # Fix versions should be empty string
-        assert vulnerabilities[0][6] == ""
+        assert vulnerabilities[0]["fix"]["versions"] == []
 
     @pytest.mark.asyncio
     async def test_grype_parse_report_multiple_locations(self, tmp_path):
@@ -679,11 +676,10 @@ class TestGrypeParser:
         report_file = tmp_path / "grype_report.json"
         report_file.write_text(json.dumps(report))
 
-        metadata = ["grype", "app", "1.0", "prod1", "team1"]
-        vulnerabilities = await parser.grype_parse_report(metadata, str(report_file))
+        vulnerabilities = await parser.grype_parser(str(report_file))
 
         # Locations should be comma-separated
-        locations = vulnerabilities[0][12]
+        locations = vulnerabilities[0]["affected_path"]
         assert "/lib/libssl.so.1.1" in locations
         assert "/lib/libcrypto.so.1.1" in locations
         assert "/usr/lib/engines-1.1/afalg.so" in locations
@@ -717,9 +713,45 @@ class TestHelperFunctions:
         from vma.helper import normalize_comparison
 
         comp_data = [
-            ("CVE-2023-1", "deb", "lib1", "/path1", "shared", 7.5, "3.1", "HIGH"),
-            ("CVE-2023-2", "deb", "lib2", "/path2", "only_version_a", 5.0, "3.1", "MEDIUM"),
-            ("CVE-2023-3", "python", "lib3", "/path3", "only_version_b", 9.0, "3.1", "CRITICAL")
+            (
+                "CVE-2023-1",
+                "HIGH",
+                "shared",
+                "deb",
+                "lib1",
+                "/path1",
+                7.5,
+                0.2,
+                ["http://example.com"],
+                ["CWE-79"],
+                {"versions": ["1.2.3"]},
+            ),
+            (
+                "CVE-2023-2",
+                "MEDIUM",
+                "only_version_a",
+                "deb",
+                "lib2",
+                "/path2",
+                5.0,
+                0.1,
+                [],
+                [],
+                {"versions": []},
+            ),
+            (
+                "CVE-2023-3",
+                "CRITICAL",
+                "only_version_b",
+                "python",
+                "lib3",
+                "/path3",
+                9.0,
+                0.9,
+                [],
+                [],
+                {"versions": ["2.0.0"]},
+            )
         ]
 
         result = normalize_comparison(comp_data)

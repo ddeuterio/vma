@@ -26,7 +26,6 @@ import tempfile
 import shutil
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock, AsyncMock, mock_open, call
-from psycopg2.extras import Json
 
 from vma import osv
 from vma import connector as c
@@ -185,7 +184,7 @@ class TestOSVParser:
         Expected:
         - Returns 6-element list [vuln, aliases, refs, severity, affected, credits]
         - All data correctly extracted and formatted
-        - JSONB fields properly wrapped in psycopg2.Json()
+        - JSONB fields properly serialized as JSON strings
         """
         # Write sample JSON to temp file
         json_path = os.path.join(temp_dir, "test_osv.json")
@@ -204,12 +203,15 @@ class TestOSVParser:
         vuln_entry = data_vuln[0]
         assert vuln_entry[0] == "GHSA-1234-5678-9abc"  # osv_id
         assert vuln_entry[1] == "1.6.0"  # schema_version
-        assert vuln_entry[2] == "2025-12-29T10:00:00.000Z"  # modified
-        assert vuln_entry[3] == "2025-01-15T08:30:00.000Z"  # published
+        expected_modified = datetime.fromisoformat("2025-12-29T10:00:00+00:00")
+        expected_published = datetime.fromisoformat("2025-01-15T08:30:00+00:00")
+        assert vuln_entry[2].astimezone(timezone.utc) == expected_modified  # modified
+        assert vuln_entry[3].astimezone(timezone.utc) == expected_published  # published
         assert vuln_entry[4] is None  # withdrawn
         assert "SQL injection" in vuln_entry[5]  # summary
         assert "authentication module" in vuln_entry[6]  # details
-        assert isinstance(vuln_entry[7], Json)  # database_specific
+        assert isinstance(vuln_entry[7], str)  # database_specific
+        assert json.loads(vuln_entry[7]) == sample_osv_json["database_specific"]
 
         # Test aliases
         assert len(data_aliases) == 2
@@ -237,8 +239,10 @@ class TestOSVParser:
         assert npm_pkg[1] == "npm"  # ecosystem
         assert npm_pkg[2] == "example-package"  # name
         assert npm_pkg[3] == "pkg:npm/example-package"  # purl
-        assert isinstance(npm_pkg[4], Json)  # ranges
-        assert isinstance(npm_pkg[5], Json)  # versions
+        assert isinstance(npm_pkg[4], str)  # ranges
+        assert isinstance(npm_pkg[5], str)  # versions
+        assert json.loads(npm_pkg[4]) == sample_osv_json["affected"][0]["ranges"]
+        assert json.loads(npm_pkg[5]) == sample_osv_json["affected"][0]["versions"]
 
         # Test credits
         assert len(data_credits) == 2

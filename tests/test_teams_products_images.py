@@ -221,6 +221,52 @@ class TestTeamManagement:
             mock_c.delete_team.assert_called_once_with(id="team1")
 
     @pytest.mark.asyncio
+    async def test_update_team_admin_success(self, client, root_user_token):
+        """Test that admin can update team description"""
+        async def override_validate_token():
+            return root_user_token
+
+        api_server.dependency_overrides[a.validate_access_token] = override_validate_token
+
+        with patch("vma.api.routers.v1.c") as mock_c, \
+             patch("vma.api.routers.v1.helper") as mock_helper:
+
+            mock_helper.validate_input.side_effect = lambda x: x
+            mock_c.update_team = AsyncMock(return_value={
+                "status": True,
+                "result": {"name": "team1"}
+            })
+
+            response = await client.patch(
+                "/api/v1/team/team1",
+                json={"name": "team1", "description": "Updated Team"},
+                headers={"Authorization": "Bearer fake_token"}
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            mock_c.update_team.assert_called_once_with(name="team1", description="Updated Team")
+
+    @pytest.mark.asyncio
+    async def test_update_team_non_admin_forbidden(self, client, read_only_user_token):
+        """Test that non-admin user cannot update teams"""
+        async def override_validate_token():
+            return read_only_user_token
+
+        api_server.dependency_overrides[a.validate_access_token] = override_validate_token
+
+        with patch("vma.api.routers.v1.helper") as mock_helper:
+            mock_helper.validate_input.side_effect = lambda x: x
+            mock_helper.errors = {"401": "user is not authorized to perform this action"}
+
+            response = await client.patch(
+                "/api/v1/team/team1",
+                json={"description": "Updated Team"},
+                headers={"Authorization": "Bearer fake_token"}
+            )
+
+            assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    @pytest.mark.asyncio
     async def test_delete_team_non_root_forbidden(self, client, read_only_user_token):
         """Test that non-admin user cannot delete teams"""
         async def override_validate_token():
@@ -332,6 +378,64 @@ class TestProductManagement:
             )
 
     @pytest.mark.asyncio
+    async def test_update_product_write_access_success(self, client, write_user_token):
+        """Test that user with write access can update products"""
+        async def override_validate_token():
+            return write_user_token
+
+        api_server.dependency_overrides[a.validate_access_token] = override_validate_token
+
+        with patch("vma.api.routers.v1.c") as mock_c, \
+             patch("vma.api.routers.v1.helper") as mock_helper:
+
+            mock_helper.validate_input.side_effect = lambda x: x
+            mock_c.update_product = AsyncMock(return_value={
+                "status": True,
+                "result": {"id": "prod1"}
+            })
+
+            response = await client.patch(
+                "/api/v1/product",
+                json={
+                    "name": "prod1",
+                    "description": "Updated Product",
+                    "team": "team1"
+                },
+                headers={"Authorization": "Bearer fake_token"}
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            mock_c.update_product.assert_called_once_with(
+                name="prod1",
+                description="Updated Product",
+                team="team1"
+            )
+
+    @pytest.mark.asyncio
+    async def test_update_product_read_only_forbidden(self, client, read_only_user_token):
+        """Test that read-only user cannot update products"""
+        async def override_validate_token():
+            return read_only_user_token
+
+        api_server.dependency_overrides[a.validate_access_token] = override_validate_token
+
+        with patch("vma.api.routers.v1.helper") as mock_helper:
+            mock_helper.validate_input.side_effect = lambda x: x
+            mock_helper.errors = {"401": "user is not authorized to perform this action"}
+
+            response = await client.patch(
+                "/api/v1/product",
+                json={
+                    "name": "prod1",
+                    "description": "Updated Product",
+                    "team": "team1"
+                },
+                headers={"Authorization": "Bearer fake_token"}
+            )
+
+            assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    @pytest.mark.asyncio
     async def test_create_product_read_only_forbidden(self, client, read_only_user_token):
         """Test that read-only user cannot create products"""
         async def override_validate_token():
@@ -397,12 +501,9 @@ class TestProductManagement:
                 "result": {"deleted_rows": 1}
             })
 
-            import json
-            response = await client.request(
-                "DELETE",
-                "/api/v1/product",
-                content=json.dumps({"name": "prod1", "team": "team1"}),
-                headers={"Authorization": "Bearer fake_token", "Content-Type": "application/json"}
+            response = await client.delete(
+                "/api/v1/product/team1/prod1",
+                headers={"Authorization": "Bearer fake_token"}
             )
 
             assert response.status_code == status.HTTP_200_OK
@@ -444,12 +545,9 @@ class TestProductManagement:
             mock_helper.validate_input.side_effect = lambda x: x
             mock_helper.errors = {"401": "user is not authorized to perform this action"}
 
-            import json
-            response = await client.request(
-                "DELETE",
-                "/api/v1/product",
-                content=json.dumps({"name": "prod1", "team": "team1"}),
-                headers={"Authorization": "Bearer fake_token", "Content-Type": "application/json"}
+            response = await client.delete(
+                "/api/v1/product/team1/prod1",
+                headers={"Authorization": "Bearer fake_token"}
             )
 
             assert response.status_code == status.HTTP_401_UNAUTHORIZED

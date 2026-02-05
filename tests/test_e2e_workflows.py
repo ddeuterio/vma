@@ -229,27 +229,31 @@ class TestVulnerabilityScanningWorkflow:
         api_server.dependency_overrides[a.validate_api_token] = override_validate_api_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_images = AsyncMock(return_value={"status": False})
+        mock_c.get_images = AsyncMock(return_value={"status": True, "result": []})
         mock_c.insert_image = AsyncMock(return_value={"status": True})
-        mock_c.insert_image_vulnerabilities = AsyncMock(return_value={
+        mock_c.insert_vulnerabilities_sca_batch = AsyncMock(return_value={
             "status": True,
             "result": "5 vulnerabilities imported"
         })
 
-        vuln_data = [
-            ["grype", "api", "2.1.0", "backend", "security", "CVE-2023-1234",
-             "2.1.1", "2023-01-01", "2023-01-01", "deb", "libssl", "1.1.1", "/usr/lib"]
-        ]
-
         response_import = await client.post(
-            "/api/v1/import",
+            "/api/v1/import/sca",
             json={
                 "scanner": "grype",
+                "image_name": "api",
+                "image_version": "2.1.0",
                 "product": "backend",
-                "image": "api",
-                "version": "2.1.0",
                 "team": "security",
-                "data": vuln_data
+                "vulnerabilities": [
+                    {
+                        "vuln_id": "CVE-2023-1234",
+                        "affected_component": "libssl",
+                        "affected_version": "1.1.1",
+                        "affected_component_type": "deb",
+                        "affected_path": "/usr/lib",
+                        "severity": {"level": "HIGH"}
+                    }
+                ]
             },
             headers={"Authorization": f"Bearer {api_token}"}
         )
@@ -269,21 +273,13 @@ class TestVulnerabilityScanningWorkflow:
         api_server.dependency_overrides[a.validate_access_token] = override_user
 
         mock_helper = mock_router_dependencies["helper"]
-        mock_helper.format_vulnerability_rows.return_value = [
-            {
-                "cve": "CVE-2023-1234",
-                "component": "libssl",
-                "cvss": {"score": 7.5, "severity": "HIGH"}
-            }
-        ]
-
-        mock_c.get_image_vulnerabilities = AsyncMock(return_value={
+        mock_c.get_vulnerabilities_sca_by_image = AsyncMock(return_value={
             "status": True,
             "result": []
         })
 
         response_vulns = await client.get(
-            "/api/v1/image/security/backend/api/2.1.0/vuln",
+            "/api/v1/image/security/backend/api/2.1.0/vuln-sca",
             headers={"Authorization": "Bearer user_token"}
         )
 
@@ -328,27 +324,31 @@ class TestImageUpdateWorkflow:
         mock_c = mock_router_dependencies["connector"]
         mock_helper = mock_router_dependencies["helper"]
 
-        mock_c.get_images = AsyncMock(return_value={"status": False})
+        mock_c.get_images = AsyncMock(return_value={"status": True, "result": []})
         mock_c.insert_image = AsyncMock(return_value={"status": True})
-        mock_c.insert_image_vulnerabilities = AsyncMock(return_value={
+        mock_c.insert_vulnerabilities_sca_batch = AsyncMock(return_value={
             "status": True,
             "result": "3 vulnerabilities imported"
         })
 
-        vuln_data = [
-            ["grype", "web-ui", "2.0.0", "frontend", "development", "CVE-2023-5678",
-             "", "2023-01-01", "2023-01-01", "npm", "react", "17.0.0", "/app/node_modules"]
-        ]
-
         response_import = await client.post(
-            "/api/v1/import",
+            "/api/v1/import/sca",
             json={
                 "scanner": "grype",
+                "image_name": "web-ui",
+                "image_version": "2.0.0",
                 "product": "frontend",
-                "image": "web-ui",
-                "version": "2.0.0",
                 "team": "development",
-                "data": vuln_data
+                "vulnerabilities": [
+                    {
+                        "vuln_id": "CVE-2023-5678",
+                        "affected_component": "react",
+                        "affected_version": "17.0.0",
+                        "affected_component_type": "npm",
+                        "affected_path": "/app/node_modules",
+                        "severity": {"level": "MEDIUM"}
+                    }
+                ]
             },
             headers={"Authorization": "Bearer api_token"}
         )
@@ -532,7 +532,7 @@ class TestAPITokenLifecycle:
         5. Verify token no longer works
         """
         root_token = mod_v1.JwtData(
-            username="cicd@test.com",
+            username="root@test.com",
             scope={"devops": "admin"},
             root=True
         )
@@ -561,7 +561,7 @@ class TestAPITokenLifecycle:
             response_create = await client.post(
                 "/api/v1/apitoken",
                 json={
-                    "username": "cicd@test.com",
+                    "username": "root@test.com",
                     "description": "CI/CD Pipeline",
                     "expires_days": 90
                 },
@@ -580,7 +580,7 @@ class TestAPITokenLifecycle:
                     {
                         "id": token_id,
                         "prefix": mock_token[:12],
-                        "user_email": "cicd@test.com",
+                        "user_email": "root@test.com",
                         "description": "CI/CD Pipeline",
                         "revoked": False
                     }
@@ -588,7 +588,7 @@ class TestAPITokenLifecycle:
             })
 
             response_list = await client.get(
-                "/api/v1/tokens",
+                "/api/v1/tokens/root@test.com",
                 headers={"Authorization": "Bearer root_token"}
             )
 
@@ -600,7 +600,7 @@ class TestAPITokenLifecycle:
                 "status": True,
                 "result": {
                     "id": token_id,
-                    "user_email": "cicd@test.com"
+                    "user_email": "root@test.com"
                 }
             })
 
@@ -627,14 +627,14 @@ class TestAPITokenLifecycle:
         api_server.dependency_overrides[a.validate_api_token] = override_validate_revoked_token
 
         response_use_revoked = await client.post(
-            "/api/v1/import",
+            "/api/v1/import/sca",
             json={
                 "scanner": "grype",
+                "image_name": "test",
+                "image_version": "1.0",
                 "product": "test",
-                "image": "test",
-                "version": "1.0",
                 "team": "devops",
-                "data": []
+                "vulnerabilities": []
             },
             headers={"Authorization": f"Bearer {mock_token}"}
         )

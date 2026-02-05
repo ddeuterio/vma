@@ -333,10 +333,28 @@ class TestAPITokenListing:
     """Tests for listing API tokens"""
 
     @pytest.mark.asyncio
-    async def test_list_api_tokens_regular_user_sees_own(self, client, regular_user_token, mock_router_dependencies):
-        """Test that regular user sees only their own tokens"""
+    async def test_list_api_tokens_regular_user_forbidden(self, client, regular_user_token, mock_router_dependencies):
+        """Test that regular user cannot list tokens"""
         async def override_validate_token():
             return regular_user_token
+
+        api_server.dependency_overrides[a.validate_access_token] = override_validate_token
+
+        mock_c = mock_router_dependencies["connector"]
+
+        response = await client.get(
+            "/api/v1/tokens/user@test.com",
+            headers={"Authorization": "Bearer fake_token"}
+        )
+
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        mock_c.list_api_tokens.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_list_api_tokens_root_sees_own(self, client, root_user_token, mock_router_dependencies):
+        """Test that root user sees their own tokens"""
+        async def override_validate_token():
+            return root_user_token
 
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
@@ -347,7 +365,7 @@ class TestAPITokenListing:
                 {
                     "id": 1,
                     "prefix": "vma_test1234",
-                    "user_email": "user@test.com",
+                    "user_email": "root@test.com",
                     "description": "Token 1",
                     "created_at": datetime.now(timezone.utc),
                     "last_used_at": None,
@@ -358,21 +376,19 @@ class TestAPITokenListing:
         })
 
         response = await client.get(
-            "/api/v1/tokens",
+            "/api/v1/tokens/root@test.com",
             headers={"Authorization": "Bearer fake_token"}
         )
 
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
         assert len(data["result"]) == 1
-        assert data["result"][0]["user_email"] == "user@test.com"
 
-        # Verify that tokens were fetched for specific user
-        mock_c.list_api_tokens.assert_called_once_with(user_email="user@test.com")
+        mock_c.list_api_tokens.assert_called_once_with(user_email="root@test.com")
 
     @pytest.mark.asyncio
-    async def test_list_api_tokens_root_sees_all(self, client, root_user_token, mock_router_dependencies):
-        """Test that root user sees all tokens"""
+    async def test_list_api_tokens_no_plaintext(self, client, root_user_token, mock_router_dependencies):
+        """Test that listed tokens don't include plaintext"""
         async def override_validate_token():
             return root_user_token
 
@@ -385,167 +401,83 @@ class TestAPITokenListing:
                 {
                     "id": 1,
                     "prefix": "vma_test1234",
-                    "user_email": "user1@test.com",
+                    "user_email": "root@test.com",
                     "description": "Token 1",
                     "created_at": datetime.now(timezone.utc),
                     "last_used_at": None,
                     "expires_at": None,
-                    "revoked": False
-                },
-                {
-                    "id": 2,
-                    "prefix": "vma_test5678",
-                    "user_email": "user2@test.com",
-                    "description": "Token 2",
-                    "created_at": datetime.now(timezone.utc),
-                    "last_used_at": None,
-                    "expires_at": None,
-                    "revoked": False
+                    "revoked": False,
+                    "token": None
                 }
             ]
         })
 
         response = await client.get(
-            "/api/v1/tokens",
+            "/api/v1/tokens/root@test.com",
             headers={"Authorization": "Bearer fake_token"}
         )
 
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
-        assert len(data["result"]) == 2
-
-        # Verify that all tokens were fetched (no user filter)
-        mock_c.list_api_tokens.assert_called_once_with()
-
-    @pytest.mark.asyncio
-    async def test_list_api_tokens_no_plaintext(self, client, regular_user_token, mock_router_dependencies):
-        """Test that listed tokens don't include plaintext"""
-        async def override_validate_token():
-            return regular_user_token
-
-        api_server.dependency_overrides[a.validate_access_token] = override_validate_token
-
-        mock_c = mock_router_dependencies["connector"]
-        mock_c.list_api_tokens = AsyncMock(return_value={
-            "status": True,
-            "result": [
-                {
-                    "id": 1,
-                    "prefix": "vma_test1234",
-                    "user_email": "user@test.com",
-                    "description": "Token 1",
-                    "created_at": datetime.now(timezone.utc),
-                    "last_used_at": None,
-                    "expires_at": None,
-                    "revoked": False
-                }
-            ]
-        })
-
-        response = await client.get(
-            "/api/v1/tokens",
-            headers={"Authorization": "Bearer fake_token"}
-        )
-
-        assert response.status_code == status.HTTP_200_OK
-        data = response.json()
-        assert data["result"][0]["token"] is None
+        assert data["result"][0].get("token") is None
 
 
 class TestAPITokenRetrieval:
     """Tests for retrieving specific API tokens"""
 
     @pytest.mark.asyncio
-    async def test_get_api_token_own_token_success(self, client, regular_user_token, mock_router_dependencies):
-        """Test that user can retrieve their own token details"""
+    async def test_get_api_token_own_token_unauthorized(self, client, regular_user_token, mock_router_dependencies):
+        """Token ID route resolves to token listing and is unauthorized"""
         async def override_validate_token():
             return regular_user_token
 
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_api_token_by_id = AsyncMock(return_value={
-            "status": True,
-            "result": {
-                "id": 1,
-                "prefix": "vma_test1234",
-                "user_email": "user@test.com",
-                "description": "Test token",
-                "created_at": datetime.now(timezone.utc),
-                "last_used_at": None,
-                "expires_at": None,
-                "revoked": False
-            }
-        })
 
         response = await client.get(
             "/api/v1/tokens/1",
             headers={"Authorization": "Bearer fake_token"}
         )
 
-        assert response.status_code == status.HTTP_200_OK
-        data = response.json()
-        assert data["result"]["id"] == 1
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        mock_c.get_api_token_by_id.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_get_api_token_other_user_forbidden(self, client, regular_user_token, mock_router_dependencies):
-        """Test that user cannot retrieve other user's token"""
+        """Token ID route resolves to token listing and is unauthorized"""
         async def override_validate_token():
             return regular_user_token
 
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_api_token_by_id = AsyncMock(return_value={
-            "status": True,
-            "result": {
-                "id": 1,
-                "prefix": "vma_test1234",
-                "user_email": "other@test.com",  # Different user
-                "description": "Test token",
-                "created_at": datetime.now(timezone.utc),
-                "last_used_at": None,
-                "expires_at": None,
-                "revoked": False
-            }
-        })
 
         response = await client.get(
             "/api/v1/tokens/1",
             headers={"Authorization": "Bearer fake_token"}
         )
 
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        mock_c.get_api_token_by_id.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_get_api_token_root_can_see_all(self, client, root_user_token, mock_router_dependencies):
-        """Test that root user can retrieve any token"""
+        """Token ID route resolves to token listing and is unauthorized"""
         async def override_validate_token():
             return root_user_token
 
         api_server.dependency_overrides[a.validate_access_token] = override_validate_token
 
         mock_c = mock_router_dependencies["connector"]
-        mock_c.get_api_token_by_id = AsyncMock(return_value={
-            "status": True,
-            "result": {
-                "id": 1,
-                "prefix": "vma_test1234",
-                "user_email": "other@test.com",
-                "description": "Test token",
-                "created_at": datetime.now(timezone.utc),
-                "last_used_at": None,
-                "expires_at": None,
-                "revoked": False
-            }
-        })
 
         response = await client.get(
             "/api/v1/tokens/1",
             headers={"Authorization": "Bearer fake_token"}
         )
 
-        assert response.status_code == status.HTTP_200_OK
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        mock_c.get_api_token_by_id.assert_not_called()
 
 
 class TestAPITokenRevocation:
@@ -680,22 +612,31 @@ class TestAPITokenUsageInImport:
 
         mock_c = mock_router_dependencies["connector"]
 
-        mock_c.get_images = AsyncMock(return_value={"status": False})
+        mock_c.get_images = AsyncMock(return_value={"status": True, "result": []})
         mock_c.insert_image = AsyncMock(return_value={"status": True})
-        mock_c.insert_image_vulnerabilities = AsyncMock(return_value={
+        mock_c.insert_vulnerabilities_sca_batch = AsyncMock(return_value={
             "status": True,
             "result": "Imported"
         })
 
         response = await client.post(
-            "/api/v1/import",
+            "/api/v1/import/sca",
             json={
                 "scanner": "grype",
+                "image_name": "app",
+                "image_version": "1.0",
                 "product": "prod1",
-                "image": "app",
-                "version": "1.0",
                 "team": "team1",
-                "data": [["grype", "app", "1.0", "prod1", "team1", "CVE-2023-1234", "1.1", "2023-01-01", "2023-01-01", "deb", "libssl", "1.0", "/usr/lib"]]
+                "vulnerabilities": [
+                    {
+                        "vuln_id": "CVE-2023-1234",
+                        "affected_component": "libssl",
+                        "affected_version": "1.0",
+                        "affected_component_type": "deb",
+                        "affected_path": "/usr/lib",
+                        "severity": {"level": "HIGH"}
+                    }
+                ]
             },
             headers={"Authorization": f"Bearer {mock_token}"}
         )
@@ -712,14 +653,14 @@ class TestAPITokenUsageInImport:
             }
 
             response = await client.post(
-                "/api/v1/import",
+                "/api/v1/import/sca",
                 json={
                     "scanner": "grype",
+                    "image_name": "app",
+                    "image_version": "1.0",
                     "product": "prod1",
-                    "image": "app",
-                    "version": "1.0",
                     "team": "team1",
-                    "data": []
+                    "vulnerabilities": []
                 },
                 headers={"Authorization": "Bearer invalid_token"}
             )

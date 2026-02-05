@@ -538,6 +538,7 @@ def mock_router_dependencies(mock_helper_errors):
         mock_c.insert_users = AsyncMock(return_value={"status": True, "result": {}})
         mock_c.insert_api_token = AsyncMock(return_value={"status": True, "result": {}})
         mock_c.insert_image_vulnerabilities = AsyncMock(return_value={"status": True, "result": {}})
+        mock_c.insert_vulnerabilities_sca_batch = AsyncMock(return_value={"status": True, "result": {}})
         mock_c.delete_product = AsyncMock(return_value={"status": True, "result": {}})
         mock_c.delete_image = AsyncMock(return_value={"status": True, "result": {}})
         mock_c.delete_team = AsyncMock(return_value={"status": True, "result": {}})
@@ -548,6 +549,7 @@ def mock_router_dependencies(mock_helper_errors):
         mock_c.get_users_w_hpass = AsyncMock(return_value={"status": True, "result": []})
         mock_c.get_vulnerabilities_by_id = AsyncMock(return_value={"status": True, "result": []})
         mock_c.get_image_vulnerabilities = AsyncMock(return_value={"status": True, "result": []})
+        mock_c.get_vulnerabilities_sca_by_image = AsyncMock(return_value={"status": True, "result": []})
         mock_c.compare_image_versions = AsyncMock(return_value={"status": True, "result": []})
 
         yield {"connector": mock_c, "helper": mock_helper}
