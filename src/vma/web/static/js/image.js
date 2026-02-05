@@ -1850,13 +1850,15 @@
     state.compareForm.addEventListener('reset', () => {
       helpers.compare?.hide();
       const savedProduct = state.compareSelections?.product || '';
-      resetCompareSelections(state, { preserveProduct: true });
-      if (state.compareProductSelect && savedProduct) {
-        state.compareProductSelect.value = savedProduct;
-        state.compareSelections.product = savedProduct;
-      }
-      updateCompareImageOptions(state);
-      resetComparisonResults(state);
+      setTimeout(() => {
+        resetCompareSelections(state, { preserveProduct: true });
+        if (state.compareProductSelect && savedProduct) {
+          state.compareProductSelect.value = savedProduct;
+          state.compareSelections.product = savedProduct;
+        }
+        updateCompareImageOptions(state);
+        resetComparisonResults(state);
+      }, 0);
     });
   }
 
