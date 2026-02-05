@@ -39,6 +39,7 @@ async def get_teams_for_authz(scope: dict, is_root: bool) -> list:
     return list(scope.keys())
 
 
+# Products funcs
 @router.get("/products")
 async def get_products(
     user_data: mod_v1.JwtData = Depends(a.validate_access_token),
@@ -119,12 +120,38 @@ async def post_product(
     return res
 
 
-@router.delete("/product")
-async def product(
-    prod: mod_v1.Product, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
+# @router.delete("/product")
+# async def product(
+#     prod: mod_v1.Product, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
+# ) -> dict:
+#     name = helper.validate_input(prod.name)
+#     team = helper.validate_input(prod.team)
+#
+#     if not is_authorized(
+#         is_root=user_data.root, scope=user_data.scope, teams=[team], op=ADMIN
+#     ):
+#         raise HTTPException(
+#             status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+#         )
+#
+#     if not name or not team:
+#         raise HTTPException(status_code=400, detail=helper.errors["400"])
+#
+#     res = None
+#     try:
+#         res = await c.delete_product(id=name, team=team)
+#     except Exception as e:
+#         logger.error(f"Error inserting product: {e}")
+#         raise HTTPException(status_code=500, detail=helper.errors["500"])
+#     return res
+
+
+@router.delete("/product/{t}/{id}")
+async def delete_product(
+    t: str, id: str, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
 ) -> dict:
-    name = helper.validate_input(prod.name)
-    team = helper.validate_input(prod.team)
+    team = helper.validate_input(t)
+    prod_id = helper.validate_input(id)
 
     if not is_authorized(
         is_root=user_data.root, scope=user_data.scope, teams=[team], op=ADMIN
@@ -133,42 +160,54 @@ async def product(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
         )
 
-    if not name or not team:
-        raise HTTPException(status_code=400, detail=helper.errors["400"])
+    if not prod_id or not team:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+        )
 
     res = None
     try:
-        res = await c.delete_product(id=name, team=team)
+        res = await c.delete_product(id=prod_id, team=team)
     except Exception as e:
-        logger.error(f"Error inserting product: {e}")
+        logger.error(f"Error deleting a product: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
     return res
 
 
-@router.get("/stats")
-async def stats(user_data: mod_v1.JwtData = Depends(a.validate_access_token)) -> dict:
-    t = await get_teams_for_authz(is_root=user_data.root, scope=user_data.scope)
+@router.patch("/product")
+async def patch_product(
+    prod: mod_v1.Product, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
+) -> dict:
+    name = helper.validate_input(prod.name)
+    team = helper.validate_input(prod.team)
+    description = (
+        helper.validate_input(prod.description)
+        if prod.description is not None
+        else None
+    )
+
     if not is_authorized(
-        is_root=user_data.root, scope=user_data.scope, teams=t, op=READ_ONLY
+        is_root=user_data.root, scope=user_data.scope, teams=[team], op=WRITE
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
         )
 
-    stats = None
+    if not name or not team or description is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+        )
+
+    res = None
     try:
-        products = await c.get_products(teams=t)
-        images = await c.get_images(teams=t)
-        stats = {
-            "products": len(products["result"]) if products["status"] else None,
-            "images": len(images["result"]) if images["status"] else None,
-        }
+        res = await c.update_product(name=name, description=description, team=team)
     except Exception as e:
-        logger.error(f"Error getting stats: {e}")
+        logger.error(f"Error updating product: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
-    return stats
+    return res
 
 
+# Images funcs
 @router.get("/images")
 async def images(user_data: mod_v1.JwtData = Depends(a.validate_access_token)) -> dict:
     t = await get_teams_for_authz(is_root=user_data.root, scope=user_data.scope)
@@ -221,39 +260,40 @@ async def image(
     return res
 
 
-# @router.get("/image/{t}/{p}/{n}/{ver}/vuln")
-# async def image_vuln(
-#     t: str,
-#     p: str,
-#     n: str,
-#     ver: str,
-#     user_data: mod_v1.JwtData = Depends(a.validate_access_token),
-# ) -> dict:
-#     team = helper.validate_input(t)
-#     name = helper.validate_input(n)
-#     version = helper.validate_input(ver)
-#     product = helper.validate_input(p)
-#
-#     if not is_authorized(
-#         is_root=user_data.root, scope=user_data.scope, teams=[team], op=READ_ONLY
-#     ):
-#         raise HTTPException(
-#             status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
-#         )
-#
-#     if not team or not name or not version or not product:
-#         raise HTTPException(
-#             status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
-#         )
-#
-#     res = None
-#     try:
-#         res = await c.get_image_vulnerabilities(product, name, version, team)
-#         res["result"] = helper.format_vulnerability_rows(res["result"])
-#     except Exception as e:
-#         logger.error(f"Error getting image: {e}")
-#         raise HTTPException(status_code=500, detail=helper.errors["500"])
-#     return res
+@router.delete("/image/{t}/{p}")
+async def delete_image(
+    t: str,
+    p: str,
+    n: str,
+    ver: str | None = None,
+    user_data: mod_v1.JwtData = Depends(a.validate_access_token),
+) -> dict:
+    team = helper.validate_input(t)
+    prod_id = helper.validate_input(p)
+    name = helper.validate_input(n)
+    version = None
+    if ver:
+        version = helper.validate_input(ver)
+
+    if not is_authorized(
+        is_root=user_data.root, scope=user_data.scope, teams=[team], op=WRITE
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    res = {"status": False, "result": "Could not delete the image"}
+    try:
+        if name and version:
+            res = await c.delete_image(
+                product=prod_id, name=name, version=version, team=team
+            )
+        elif name:
+            res = await c.delete_image(product=prod_id, name=name, team=team)
+    except Exception as e:
+        logger.error(f"Error deleting a product: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
 
 
 @router.get("/image/compare/{t}/{p}/{n}/{v1}/{v2}")
@@ -296,6 +336,7 @@ async def image_compare(
     return res
 
 
+# DB Vulns funcs
 @router.get("/cve/{src}/{id}")
 async def cve(
     src: str, id: str, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
@@ -322,51 +363,35 @@ async def cve(
     return res
 
 
-# @router.post("/import")
-# async def importer(
-#     imp: mod_v1.Import, user_data: dict = Depends(a.validate_api_token)
-# ) -> dict:
-#     sc = helper.validate_input(imp.scanner)
-#     product = helper.validate_input(imp.product)
-#     image = helper.validate_input(imp.image)
-#     version = helper.validate_input(imp.version)
-#     team = helper.validate_input(imp.team)
-#     data = imp.data
-#
-#     if not user_data["status"]:
-#         raise HTTPException(
-#             status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
-#         )
-#
-#     if not is_authorized(
-#         is_root=user_data["result"]["root"],
-#         scope=user_data["result"]["teams"],
-#         teams=[team],
-#         op=WRITE,
-#     ):
-#         raise HTTPException(
-#             status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
-#         )
-#
-#     if not data or len(data) < 0 or not image or not version or not product or not team:
-#         raise HTTPException(status_code=400, detail=helper.errors["400"])
-#
-#     res = None
-#     try:
-#         chk = await c.get_images(
-#             name=image, version=version, product=product, teams=[team]
-#         )
-#         if not chk["status"]:
-#             ins = await c.insert_image(
-#                 name=image, version=version, product=product, team=team
-#             )
-#         res = await c.insert_image_vulnerabilities(data)
-#     except Exception as e:
-#         logger.error(f"Error inserting vulnerabilities: {e}")
-#         raise HTTPException(status_code=500, detail=helper.errors["500"])
-#     return res
+@router.post("/update/{db}")
+async def update_db(
+    db: str, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
+) -> dict:
+    db_val = helper.validate_input(db)
+
+    if db_val not in ["osv", "nvd"]:
+        raise HTTPException(status_code=400, detail=helper.errors["400"])
+
+    if not is_authorized(
+        is_root=user_data.root, scope=user_data.scope, teams=["admin"], op=ADMIN
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    res = {"status": True, "result": "Action triggered"}
+    try:
+        if db_val == "nvd":
+            await nvd.get_modified_cves()  # TODO: Use queues for this type of tasks
+        elif db_val == "osv":
+            await osv.get_recent()  # TODO: use queues for this type of tasks
+    except Exception as e:
+        logger.error(f"Error updating database {db_val}: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
 
 
+# SCA funcs
 @router.post("/import/sca")
 async def import_vulnerabilities_sca(
     imp: mod_v1.ImportSca,
@@ -480,6 +505,163 @@ async def image_vuln_sca(
     return res
 
 
+# SAST funcs
+@router.post("/repo")
+async def post_repo(
+    repo: mod_v1.Repository,
+    user_data: mod_v1.JwtData = Depends(a.validate_access_token),
+) -> dict:
+    team = helper.validate_input(repo.team)
+    product = helper.validate_input(repo.product)
+    name = helper.validate_input(repo.name)
+    url = helper.validate_input(repo.url)
+
+    if not is_authorized(
+        is_root=user_data.root, scope=user_data.scope, teams=[team], op=WRITE
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not team or not product or not name or not url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+        )
+
+    res = None
+    try:
+        res = await c.insert_repository(product=product, team=team, name=name, url=url)
+    except Exception as e:
+        logger.error(f"Error inserting repository: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
+
+
+@router.delete("/repo/{team}/{product}/{name}")
+async def delete_repo(
+    team: str,
+    product: str,
+    name: str,
+    user_data: mod_v1.JwtData = Depends(a.validate_access_token),
+) -> dict:
+    team_val = helper.validate_input(team)
+    product_val = helper.validate_input(product)
+    name_val = helper.validate_input(name)
+
+    if not is_authorized(
+        is_root=user_data.root, scope=user_data.scope, teams=[team_val], op=ADMIN
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not team_val or not product_val or not name_val:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+        )
+
+    res = None
+    try:
+        res = await c.delete_repository(
+            team=team_val, product=product_val, name=name_val
+        )
+    except Exception as e:
+        logger.error(f"Error deleting repository: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
+
+
+@router.get("/repo/{team}")
+async def get_repo_team(
+    team: str, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
+) -> dict:
+    team_val = helper.validate_input(team)
+
+    if not is_authorized(
+        is_root=user_data.root, scope=user_data.scope, teams=[team_val], op=READ_ONLY
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not team_val:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+        )
+
+    res = None
+    try:
+        res = await c.get_repositories(teams=[team_val])
+    except Exception as e:
+        logger.error(f"Error getting repositories: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
+
+
+@router.get("/repo/{team}/{product}")
+async def get_repo_product(
+    team: str,
+    product: str,
+    user_data: mod_v1.JwtData = Depends(a.validate_access_token),
+) -> dict:
+    team_val = helper.validate_input(team)
+    product_val = helper.validate_input(product)
+
+    if not is_authorized(
+        is_root=user_data.root, scope=user_data.scope, teams=[team_val], op=READ_ONLY
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not team_val or not product_val:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+        )
+
+    res = None
+    try:
+        res = await c.get_repositories(teams=[team_val], product=product_val)
+    except Exception as e:
+        logger.error(f"Error getting repositories: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
+
+
+@router.get("/repo/{team}/{product}/{name}")
+async def get_repo_name(
+    team: str,
+    product: str,
+    name: str,
+    user_data: mod_v1.JwtData = Depends(a.validate_access_token),
+) -> dict:
+    team_val = helper.validate_input(team)
+    product_val = helper.validate_input(product)
+    name_val = helper.validate_input(name)
+
+    if not is_authorized(
+        is_root=user_data.root, scope=user_data.scope, teams=[team_val], op=READ_ONLY
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not team_val or not product_val or not name_val:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+        )
+
+    res = None
+    try:
+        res = await c.get_repositories(
+            teams=[team_val], product=product_val, name=name_val
+        )
+    except Exception as e:
+        logger.error(f"Error getting repositories: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
+
+
 @router.post("/import/sast")
 async def import_vulnerabilities_sast(
     imp: mod_v1.ImportSast,
@@ -487,6 +669,7 @@ async def import_vulnerabilities_sast(
 ) -> dict:
     """Import SAST findings (e.g. from Semgrep)."""
     scanner = helper.validate_input(imp.scanner)
+    repo = helper.validate_input(imp.repository)
     product = helper.validate_input(imp.product)
     team = helper.validate_input(imp.team)
     findings = imp.findings
@@ -506,7 +689,7 @@ async def import_vulnerabilities_sast(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
         )
 
-    if not product or not team or not scanner:
+    if not product or not team or not scanner or not repo:
         raise HTTPException(status_code=400, detail=helper.errors["400"])
 
     if not findings or len(findings) == 0:
@@ -524,6 +707,7 @@ async def import_vulnerabilities_sast(
 
         res = await c.insert_vulnerabilities_sast_batch(
             findings=findings,
+            repo=repo,
             product=product,
             team=team,
             scanner=scanner,
@@ -535,6 +719,41 @@ async def import_vulnerabilities_sast(
         raise
     except Exception as e:
         logger.error(f"Error importing SAST findings: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
+
+
+@router.get("/sast/{team}/{product}/{repo}")
+async def get_vulnerabilities_sast_repo(
+    team: str,
+    product: str,
+    repo: str,
+    user_data: mod_v1.JwtData = Depends(a.validate_access_token),
+) -> dict:
+    """Get SAST findings for a specific product."""
+    team_val = helper.validate_input(team)
+    product_val = helper.validate_input(product)
+    repo_val = helper.validate_input(repo)
+
+    if not is_authorized(
+        is_root=user_data.root, scope=user_data.scope, teams=[team_val], op=READ_ONLY
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not team_val or not product_val:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+        )
+
+    res = None
+    try:
+        res = await c.get_vulnerabilities_sast_by_repo(
+            product=product_val, team=team_val, repo=repo
+        )
+    except Exception as e:
+        logger.error(f"Error getting SAST findings: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
     return res
 
@@ -601,15 +820,17 @@ async def get_vulnerabilities_sast_team(
     return res
 
 
-@router.delete("/sast/{team}/{product}")
+@router.delete("/sast/{team}/{product}/{repo}")
 async def delete_vulnerabilities_sast(
     team: str,
     product: str,
+    repo: str,
     user_data: mod_v1.JwtData = Depends(a.validate_access_token),
 ) -> dict:
     """Delete all SAST findings for a product."""
     team_val = helper.validate_input(team)
     product_val = helper.validate_input(product)
+    repo_val = helper.validate_input(repo)
 
     if not is_authorized(
         is_root=user_data.root, scope=user_data.scope, teams=[team_val], op=ADMIN
@@ -618,15 +839,15 @@ async def delete_vulnerabilities_sast(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
         )
 
-    if not team_val or not product_val:
+    if not team_val or not product_val or not repo_val:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
         )
 
     res = None
     try:
-        res = await c.delete_vulnerabilities_sast_by_product(
-            product=product_val, team=team_val
+        res = await c.delete_vulnerabilities_sast_by_repo(
+            product=product_val, team=team_val, repo=repo_val
         )
     except Exception as e:
         logger.error(f"Error deleting SAST findings: {e}")
@@ -663,70 +884,7 @@ async def sast_stats(
     return res
 
 
-@router.delete("/product/{t}/{id}")
-async def delete_product(
-    t: str, id: str, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
-) -> dict:
-    team = helper.validate_input(t)
-    prod_id = helper.validate_input(id)
-
-    if not is_authorized(
-        is_root=user_data.root, scope=user_data.scope, teams=[team], op=ADMIN
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
-        )
-
-    if not prod_id or not team:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
-        )
-
-    res = None
-    try:
-        res = await c.delete_product(id=prod_id, team=team)
-    except Exception as e:
-        logger.error(f"Error deleting a product: {e}")
-        raise HTTPException(status_code=500, detail=helper.errors["500"])
-    return res
-
-
-@router.delete("/image/{t}/{p}")
-async def delete_image(
-    t: str,
-    p: str,
-    n: str,
-    ver: str | None = None,
-    user_data: mod_v1.JwtData = Depends(a.validate_access_token),
-) -> dict:
-    team = helper.validate_input(t)
-    prod_id = helper.validate_input(p)
-    name = helper.validate_input(n)
-    version = None
-    if ver:
-        version = helper.validate_input(ver)
-
-    if not is_authorized(
-        is_root=user_data.root, scope=user_data.scope, teams=[team], op=WRITE
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
-        )
-
-    res = {"status": False, "result": "Could not delete the image"}
-    try:
-        if name and version:
-            res = await c.delete_image(
-                product=prod_id, name=name, version=version, team=team
-            )
-        elif name:
-            res = await c.delete_image(product=prod_id, name=name, team=team)
-    except Exception as e:
-        logger.error(f"Error deleting a product: {e}")
-        raise HTTPException(status_code=500, detail=helper.errors["500"])
-    return res
-
-
+# Team funcs
 @router.post("/team")
 async def post_team(
     team: mod_v1.Team, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
@@ -820,6 +978,47 @@ async def delete_team(
     return res
 
 
+@router.patch("/team/{id}")
+async def patch_team(
+    id: str,
+    team: mod_v1.TeamUpdate,
+    user_data: mod_v1.JwtData = Depends(a.validate_access_token),
+) -> dict:
+    team_id = helper.validate_input(id)
+    description = (
+        helper.validate_input(team.description)
+        if team.description is not None
+        else None
+    )
+    body_name = helper.validate_input(team.name) if team.name else None
+
+    if not is_authorized(
+        is_root=user_data.root, scope=user_data.scope, teams=[team_id], op=ADMIN
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
+        )
+
+    if not team_id or description is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+        )
+
+    if body_name and body_name != team_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=helper.errors["400"]
+        )
+
+    res = None
+    try:
+        res = await c.update_team(name=team_id, description=description)
+    except Exception as e:
+        logger.error(f"Error updating team: {e}")
+        raise HTTPException(status_code=500, detail=helper.errors["500"])
+    return res
+
+
+# User funcs
 @router.post("/user")
 async def post_user(
     user: mod_v1.User, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
@@ -956,6 +1155,7 @@ async def delete_user(
     return res
 
 
+# JWT funcs
 @router.post("/token")
 async def token(
     response: Response, form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
@@ -1244,29 +1444,26 @@ async def revoke_api_token(
     return res
 
 
-@router.post("/update/{db}")
-async def update_db(
-    db: str, user_data: mod_v1.JwtData = Depends(a.validate_access_token)
-) -> dict:
-    db_val = helper.validate_input(db)
-
-    if db_val not in ["osv", "nvd"]:
-        raise HTTPException(status_code=400, detail=helper.errors["400"])
-
+# Stats funcs
+@router.get("/stats")
+async def stats(user_data: mod_v1.JwtData = Depends(a.validate_access_token)) -> dict:
+    t = await get_teams_for_authz(is_root=user_data.root, scope=user_data.scope)
     if not is_authorized(
-        is_root=user_data.root, scope=user_data.scope, teams=["admin"], op=ADMIN
+        is_root=user_data.root, scope=user_data.scope, teams=t, op=READ_ONLY
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=helper.errors["401"]
         )
 
-    res = {"status": True, "result": "Action triggered"}
+    stats = None
     try:
-        if db_val == "nvd":
-            await nvd.get_modified_cves()  # TODO: Use queues for this type of tasks
-        elif db_val == "osv":
-            await osv.get_recent()  # TODO: use queues for this type of tasks
+        products = await c.get_products(teams=t)
+        images = await c.get_images(teams=t)
+        stats = {
+            "products": len(products["result"]) if products["status"] else None,
+            "images": len(images["result"]) if images["status"] else None,
+        }
     except Exception as e:
-        logger.error(f"Error updating database {db_val}: {e}")
+        logger.error(f"Error getting stats: {e}")
         raise HTTPException(status_code=500, detail=helper.errors["500"])
-    return res
+    return stats

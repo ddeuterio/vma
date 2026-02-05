@@ -709,6 +709,8 @@ body {
 .compare-tip {
     margin-top: 8px;
     font-size: 13px;
+    padding-top: 6px;
+    padding-bottom: 6px;
     color: var(--color-secondary-lightest);
 }
 
@@ -3138,7 +3140,12 @@ html[data-theme="dark"] .field-hint {
 
 .vuln-detail-content {
     padding: 1.5rem;
-    background: #fafafa;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: 16px;
+    box-shadow: var(--shadow-lg);
+    color: var(--text-primary);
+    transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 
 .vuln-detail-section {
@@ -3153,9 +3160,9 @@ html[data-theme="dark"] .field-hint {
     font-size: 1rem;
     font-weight: 600;
     color: var(--text-primary);
-    margin: 0 0 1rem 0;
+    margin: 0 0 1rem;
     padding-bottom: 0.5rem;
-    border-bottom: 2px solid #d4d4d8;
+    border-bottom: 2px solid var(--border-light);
 }
 
 /* Meta Row - Badges at top */
@@ -3175,12 +3182,13 @@ html[data-theme="dark"] .field-hint {
 
 .vuln-detail-field {
     padding: 0.75rem;
-    background: #ffffff;
-    border: 1px solid #d4d4d8;
-    border-radius: 6px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
     font-size: 0.9rem;
     line-height: 1.5;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    box-shadow: var(--shadow-sm);
+    color: var(--text-secondary);
 }
 
 .vuln-detail-field strong {
@@ -3208,12 +3216,13 @@ html[data-theme="dark"] .field-hint {
 .purl-display code {
     flex: 1;
     padding: 0.5rem;
-    background: #f4f4f5;
-    border: 1px solid #d4d4d8;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
     border-radius: 4px;
     font-size: 0.85rem;
     overflow-x: auto;
     white-space: nowrap;
+    color: var(--text-primary);
 }
 
 /* Lists */
@@ -3225,11 +3234,12 @@ html[data-theme="dark"] .field-hint {
 
 .vuln-detail-list li {
     padding: 0.5rem;
-    background: #f4f4f5;
-    border: 1px solid #d4d4d8;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
     border-radius: 4px;
     margin-bottom: 0.5rem;
     font-size: 0.85rem;
+    color: var(--text-secondary);
 }
 
 .vuln-detail-list li:last-child {
@@ -3239,6 +3249,7 @@ html[data-theme="dark"] .field-hint {
 .vuln-detail-list code {
     font-family: 'Monaco', 'Menlo', monospace;
     font-size: 0.85rem;
+    color: var(--text-primary);
 }
 
 /* CVSS Detail Cards */
@@ -3249,11 +3260,12 @@ html[data-theme="dark"] .field-hint {
 }
 
 .cvss-detail-card {
-    background: #ffffff;
-    border: 1px solid #d4d4d8;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
     border-radius: 8px;
     padding: 1rem;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    box-shadow: var(--shadow-sm);
+    color: var(--text-secondary);
 }
 
 .cvss-detail-header {
@@ -3291,12 +3303,13 @@ html[data-theme="dark"] .field-hint {
 .cvss-detail-vector code {
     display: block;
     padding: 0.5rem;
-    background: #f4f4f5;
-    border: 1px solid #d4d4d8;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
     border-radius: 4px;
     font-size: 0.8rem;
     overflow-x: auto;
     white-space: nowrap;
+    color: var(--text-primary);
 }
 
 .cvss-detail-subscores {
@@ -3308,7 +3321,7 @@ html[data-theme="dark"] .field-hint {
 
 .cvss-detail-subscores span {
     padding: 0.25rem 0.5rem;
-    background: #f4f4f5;
+    background: var(--bg-primary);
     border-radius: 4px;
 }
 
@@ -3320,11 +3333,12 @@ html[data-theme="dark"] .field-hint {
 }
 
 .match-detail-card {
-    background: #ffffff;
-    border: 1px solid #d4d4d8;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
     border-radius: 8px;
     padding: 1rem;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    box-shadow: var(--shadow-sm);
+    color: var(--text-secondary);
 }
 
 .match-detail-header {
@@ -3332,7 +3346,7 @@ html[data-theme="dark"] .field-hint {
     color: var(--text-primary);
     margin-bottom: 0.75rem;
     padding-bottom: 0.5rem;
-    border-bottom: 1px solid #d4d4d8;
+    border-bottom: 1px solid var(--border-light);
 }
 
 .match-detail-header code {
@@ -3353,7 +3367,7 @@ html[data-theme="dark"] .field-hint {
 
 .match-detail-field code {
     font-size: 0.8rem;
-    background: #f4f4f5;
+    background: var(--bg-secondary);
     padding: 2px 4px;
     border-radius: 3px;
 }
@@ -3407,12 +3421,12 @@ html[data-theme="dark"] .field-hint {
 /* Description */
 .vuln-detail-description {
     padding: 1rem;
-    background: #ffffff;
-    border: 1px solid #d4d4d8;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
     border-radius: 6px;
     line-height: 1.7;
     color: var(--text-secondary);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    box-shadow: var(--shadow-sm);
 }
 
 .vuln-detail-description p {
@@ -3420,72 +3434,6 @@ html[data-theme="dark"] .field-hint {
     font-size: 0.95rem;
 }
 
-/* Dark Theme Adjustments */
-html[data-theme="dark"] .vuln-detail-content {
-    background: transparent;
-    color: var(--color-gray-200);
-}
-
-html[data-theme="dark"] .vuln-detail-section h4 {
-    color: var(--color-gray-100);
-    border-bottom-color: var(--color-gray-700);
-}
-
-html[data-theme="dark"] .vuln-detail-field,
-html[data-theme="dark"] .cvss-detail-card,
-html[data-theme="dark"] .match-detail-card {
-    background: var(--color-gray-800);
-    border-color: var(--color-gray-700);
-    color: var(--color-gray-200);
-}
-
-html[data-theme="dark"] .vuln-detail-field strong {
-    color: var(--color-gray-300);
-}
-
-html[data-theme="dark"] .purl-display code,
-html[data-theme="dark"] .vuln-detail-list li,
-html[data-theme="dark"] .cvss-detail-vector code,
-html[data-theme="dark"] .match-detail-field code {
-    background: var(--color-gray-900);
-    border-color: var(--color-gray-700);
-    color: var(--color-gray-200);
-}
-
-html[data-theme="dark"] .cvss-detail-header .cvss-score {
-    color: #60a5fa;
-}
-
-html[data-theme="dark"] .cvss-detail-header .cvss-version {
-    background: var(--color-gray-700);
-    color: var(--color-gray-300);
-}
-
-html[data-theme="dark"] .cvss-detail-header .cvss-source {
-    color: var(--color-gray-400);
-}
-
-html[data-theme="dark"] .cvss-detail-subscores {
-    color: var(--color-gray-300);
-}
-
-html[data-theme="dark"] .cvss-detail-subscores span {
-    background: var(--color-gray-700);
-    color: var(--color-gray-200);
-}
-
-html[data-theme="dark"] .match-detail-header {
-    color: var(--color-gray-100);
-    border-bottom-color: var(--color-gray-700);
-}
-
-html[data-theme="dark"] .match-detail-header code {
-    color: #60a5fa;
-}
-
-html[data-theme="dark"] .match-detail-field {
-    color: var(--color-gray-300);
-}
 
 html[data-theme="dark"] .cwe-badge {
     background: rgba(202, 138, 4, 0.2);
@@ -3493,23 +3441,9 @@ html[data-theme="dark"] .cwe-badge {
     border-color: rgba(202, 138, 4, 0.3);
 }
 
-html[data-theme="dark"] .vuln-detail-refs a {
-    color: #60a5fa;
-}
-
-html[data-theme="dark"] .vuln-detail-description {
-    background: var(--color-gray-800);
-    border-color: var(--color-gray-700);
-    color: var(--color-gray-300);
-}
-
 html[data-theme="dark"] [data-vuln-detail-card] {
     background: #18181b;
     color: #fafafa;
-}
-
-html[data-theme="dark"] .vuln-detail-list code {
-    color: var(--color-gray-200);
 }
 
 html[data-theme="dark"] .purl-display .btn {

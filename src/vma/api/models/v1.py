@@ -16,6 +16,13 @@ class Image(BaseModel):
     team: str
 
 
+class Repository(BaseModel):
+    product: str
+    team: str
+    name: str
+    url: str
+
+
 class Import(BaseModel):
     scanner: str
     product: str
@@ -31,7 +38,9 @@ class ImportSca(BaseModel):
     image_version: str
     product: str
     team: str
-    vulnerabilities: list  # List of VulnerabilityScaUniversal dicts (see data_schema.py)
+    vulnerabilities: (
+        list  # List of VulnerabilityScaUniversal dicts (see data_schema.py)
+    )
 
 
 class ImageCompare(BaseModel):
@@ -44,6 +53,7 @@ class ImageCompare(BaseModel):
 
 class ImportSast(BaseModel):
     scanner: str
+    repository: str
     product: str
     team: str
     findings: list  # List of VulnerabilitySast dicts
@@ -51,6 +61,11 @@ class ImportSast(BaseModel):
 
 class Team(BaseModel):
     name: str
+    description: str | None = None
+
+
+class TeamUpdate(BaseModel):
+    name: str | None = None
     description: str | None = None
 
 

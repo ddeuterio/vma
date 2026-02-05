@@ -129,10 +129,52 @@
             feedbackAttribute: 'data-product-list-feedback'
         });
 
+        const detailCard = createElementWithAttrs('div', '', {
+            class: 'table-card page-section',
+            hidden: true,
+            'data-product-detail-card': ''
+        });
+        detailCard.innerHTML = `
+            <div class="table-header table-header--stacked">
+                <div>
+                    <h2 data-product-detail-title>Product Details</h2>
+                    <p class="table-subtitle" data-product-detail-meta></p>
+                </div>
+                <div class="table-header__actions">
+                    <button type="button" class="btn link" data-product-detail-back>
+                        <i class="fas fa-arrow-left"></i>
+                        Go back
+                    </button>
+                </div>
+            </div>
+            <form data-product-update-form>
+                <div class="form-group">
+                    <label for="product-detail-id">Product ID</label>
+                    <input type="text" id="product-detail-id" name="id" disabled>
+                </div>
+                <div class="form-group">
+                    <label for="product-detail-team">Team</label>
+                    <input type="text" id="product-detail-team" name="team" disabled>
+                </div>
+                <div class="form-group">
+                    <label for="product-detail-description">Description</label>
+                    <textarea id="product-detail-description" name="description" rows="3" placeholder="Add a description" required></textarea>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn primary">
+                        <i class="fas fa-save"></i>
+                        Update Product
+                    </button>
+                </div>
+            </form>
+            <div class="inline-message" data-product-update-feedback hidden></div>
+        `;
+
         wrapper.appendChild(toolbar);
         wrapper.appendChild(formCard);
         wrapper.appendChild(deleteCard);
         wrapper.appendChild(listCard);
+        wrapper.appendChild(detailCard);
         root.appendChild(wrapper);
 
         return {
@@ -149,11 +191,22 @@
             deleteForm: deleteCard.querySelector('[data-product-delete-form]'),
             deleteFeedback: deleteCard.querySelector('[data-product-delete-feedback]'),
             deleteSelect: deleteCard.querySelector('#product-delete-id'),
-            teamSelect: formCard.querySelector('#product-team')
+            teamSelect: formCard.querySelector('#product-team'),
+            detailCard,
+            detailBackButton: detailCard.querySelector('[data-product-detail-back]'),
+            detailTitle: detailCard.querySelector('[data-product-detail-title]'),
+            detailMeta: detailCard.querySelector('[data-product-detail-meta]'),
+            updateForm: detailCard.querySelector('[data-product-update-form]'),
+            updateFeedback: detailCard.querySelector('[data-product-update-feedback]'),
+            detailIdInput: detailCard.querySelector('#product-detail-id'),
+            detailTeamInput: detailCard.querySelector('#product-detail-team'),
+            detailDescriptionInput: detailCard.querySelector('#product-detail-description'),
+            currentProduct: null,
+            view: 'list'
         };
     }
 
-    function renderRows(rowsBody, counter, items) {
+    function renderRows(rowsBody, counter, items, onRowClick) {
         if (!rowsBody || !counter) {
             return;
         }
@@ -178,9 +231,78 @@
             row.appendChild(createElementWithAttrs('td', id || '—'));
             row.appendChild(createElementWithAttrs('td', description || '—'));
             row.appendChild(createElementWithAttrs('td', team || '—'));
+            if (id && team && typeof onRowClick === 'function') {
+                row.setAttribute('data-product-id', id);
+                row.setAttribute('data-product-team', team);
+                row.setAttribute('data-product-description', description || '');
+                row.addEventListener('click', () => onRowClick({
+                    id,
+                    description: description || '',
+                    team
+                }));
+            }
             rowsBody.appendChild(row);
         });
         counter.textContent = items.length;
+    }
+
+    function switchToDetailView(state, product) {
+        state.view = 'detail';
+        state.currentProduct = product;
+        if (state.listCard) {
+            state.listCard.hidden = true;
+        }
+        if (state.formCard) {
+            state.formCard.hidden = true;
+        }
+        if (state.deleteCard) {
+            state.deleteCard.hidden = true;
+        }
+        if (state.detailCard) {
+            state.detailCard.hidden = false;
+        }
+        if (state.detailTitle) {
+            state.detailTitle.textContent = product?.id ? `Product · ${product.id}` : 'Product Details';
+        }
+        if (state.detailMeta) {
+            state.detailMeta.textContent = product?.team ? `Team: ${product.team}` : '';
+        }
+        if (state.detailIdInput) {
+            state.detailIdInput.value = product?.id || '';
+        }
+        if (state.detailTeamInput) {
+            state.detailTeamInput.value = product?.team || '';
+        }
+        if (state.detailDescriptionInput) {
+            state.detailDescriptionInput.value = product?.description || '';
+        }
+        if (state.updateFeedback) {
+            state.updateFeedback.hidden = true;
+            state.updateFeedback.textContent = '';
+        }
+        setPageTitle?.(product?.id ? `Products · ${product.id}` : 'Products');
+    }
+
+    function switchToListView(state) {
+        state.view = 'list';
+        state.currentProduct = null;
+        if (state.detailCard) {
+            state.detailCard.hidden = true;
+        }
+        if (state.listCard) {
+            state.listCard.hidden = false;
+        }
+        if (state.formCard) {
+            state.formCard.hidden = false;
+        }
+        if (state.deleteCard) {
+            state.deleteCard.hidden = false;
+        }
+        if (state.updateFeedback) {
+            state.updateFeedback.hidden = true;
+            state.updateFeedback.textContent = '';
+        }
+        setPageTitle?.('Products');
     }
 
     function populateTeamOptions(state, teams) {
@@ -254,13 +376,57 @@
         try {
             const payload = await fetchJSON(apiUrl('/products'));
             const products = normalizeApiResponse(payload);
-            renderRows(state.rowsBody, state.counter, products);
+            renderRows(state.rowsBody, state.counter, products, product => {
+                switchToDetailView(state, product);
+            });
             state.productsData = products;
             updateDeleteOptions(state);
         } catch (error) {
             renderRows(state.rowsBody, state.counter, []);
             helpers.list?.show(error.message || 'Unable to load products.', 'error');
         }
+    }
+
+    function handleUpdateForm(state, helpers) {
+        if (!state.updateForm) {
+            return;
+        }
+
+        state.updateForm.addEventListener('submit', async event => {
+            event.preventDefault();
+            helpers.update?.hide();
+
+            const name = state.detailIdInput?.value?.trim();
+            const team = state.detailTeamInput?.value?.trim();
+            const description = state.detailDescriptionInput?.value?.trim();
+
+            if (!name || !team) {
+                helpers.update?.show('Unable to identify the selected product.', 'error');
+                return;
+            }
+
+            if (!description) {
+                helpers.update?.show('Description is required to update the product.', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetchJSON(apiUrl('/product'), {
+                    method: 'PATCH',
+                    body: JSON.stringify({ name, team, description })
+                });
+
+                if (!response || response.status === false) {
+                    throw new Error('The product could not be updated.');
+                }
+
+                await loadProducts(state, helpers);
+                switchToDetailView(state, { id: name, team, description });
+                helpers.update?.show('Product updated successfully.', 'success');
+            } catch (error) {
+                helpers.update?.show(error.message || 'Failed to update product.', 'error');
+            }
+        });
     }
 
     function handleSubmit(state, helpers) {
@@ -438,14 +604,17 @@
         const helpers = {
             form: createMessageHelper(state.feedback, { closeButton: false }),
             list: createMessageHelper(state.listFeedback, { closeButton: false }),
-            delete: createMessageHelper(state.deleteFeedback, { closeButton: false })
+            delete: createMessageHelper(state.deleteFeedback, { closeButton: false }),
+            update: createMessageHelper(state.updateFeedback, { closeButton: false })
         };
 
         loadTeams(state, helpers);
         loadProducts(state, helpers);
         handleSubmit(state, helpers);
+        handleUpdateForm(state, helpers);
         setupFormToggle(state, helpers);
         setupDeleteToggle(state, helpers);
         handleDeleteForm(state, helpers);
+        state.detailBackButton?.addEventListener('click', () => switchToListView(state));
     });
 })();

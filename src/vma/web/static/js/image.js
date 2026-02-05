@@ -132,8 +132,7 @@
   const LIST_COLUMNS = [
     { key: 'name', header: 'Name', sortable: true },
     { key: 'version', header: 'Version', sortable: true },
-    { key: 'product', header: 'Product', sortable: true },
-    { key: 'actions', header: '', sortable: false }
+    { key: 'product', header: 'Product', sortable: true }
   ];
 
   function truncate(str, max) {
@@ -1038,7 +1037,7 @@
       const message = filterValue ? 'No images match this product.' : 'No images yet.';
       rowsBody.innerHTML = '';
       const row = document.createElement('tr');
-      const cell = createElementWithAttrs('td', message, { colspan: '4', class: 'empty' });
+      const cell = createElementWithAttrs('td', message, { colspan: '3', class: 'empty' });
       row.appendChild(cell);
       rowsBody.appendChild(row);
       counter.textContent = '0';
@@ -1056,21 +1055,15 @@
       const teamId = image.team ?? image.team_id ?? image[3] ?? '';
 
       const row = document.createElement('tr');
+      row.style.cursor = 'pointer';
+      row.setAttribute('data-image-action', 'details');
+      row.setAttribute('data-image-name', name);
+      row.setAttribute('data-image-version', version);
+      row.setAttribute('data-image-product', productId);
+      row.setAttribute('data-image-team', teamId);
       row.appendChild(createElementWithAttrs('td', name));
       row.appendChild(createElementWithAttrs('td', version));
       row.appendChild(createElementWithAttrs('td', productId));
-      const actionCell = document.createElement('td');
-      const detailsButton = createElementWithAttrs('button', 'View details', {
-        type: 'button',
-        class: 'btn link',
-        'data-image-action': 'details',
-        'data-image-name': name,
-        'data-image-version': version,
-        'data-image-product': productId,
-        'data-image-team': teamId
-      });
-      actionCell.appendChild(detailsButton);
-      row.appendChild(actionCell);
       rowsBody.appendChild(row);
     });
 
@@ -1281,7 +1274,7 @@
             <table class="data-table">
                 <thead data-image-list-thead><tr></tr></thead>
                 <tbody data-image-rows>
-                    <tr><td colspan="4" class="empty">Loading…</td></tr>
+                    <tr><td colspan="3" class="empty">Loading…</td></tr>
                 </tbody>
             </table>
         `;
@@ -1448,7 +1441,7 @@
 
     state.rowsBody.innerHTML = '';
     const loadingRow = document.createElement('tr');
-    loadingRow.appendChild(createElementWithAttrs('td', 'Loading…', { colspan: '4', class: 'empty' }));
+    loadingRow.appendChild(createElementWithAttrs('td', 'Loading…', { colspan: '3', class: 'empty' }));
     state.rowsBody.appendChild(loadingRow);
     helpers.list?.hide();
     helpers.delete?.hide();
@@ -1465,7 +1458,7 @@
       state.rowsBody.innerHTML = '';
       const row = document.createElement('tr');
       row.appendChild(
-        createElementWithAttrs('td', 'Unable to load images.', { colspan: '4', class: 'empty' })
+        createElementWithAttrs('td', 'Unable to load images.', { colspan: '3', class: 'empty' })
       );
       state.rowsBody.appendChild(row);
       state.counter.textContent = '0';
@@ -1856,7 +1849,12 @@
 
     state.compareForm.addEventListener('reset', () => {
       helpers.compare?.hide();
-      resetCompareSelections(state);
+      const savedProduct = state.compareSelections?.product || '';
+      resetCompareSelections(state, { preserveProduct: true });
+      if (state.compareProductSelect && savedProduct) {
+        state.compareProductSelect.value = savedProduct;
+        state.compareSelections.product = savedProduct;
+      }
       updateCompareImageOptions(state);
       resetComparisonResults(state);
     });

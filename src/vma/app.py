@@ -47,6 +47,7 @@ def setup_args():
     importer.add_argument(
         "--api-version", choices=["v1"], default="v1", help="API version to use"
     )
+    importer.add_argument("--repo", help="Repository name")
     importer.add_argument("--product", help="Product ID")
     importer.add_argument("--image", help="Image ID")
     importer.add_argument("--version", help="Image version")
@@ -117,6 +118,7 @@ async def main():
                 data = await par.semgrep_parser(path=file)
                 payload = {
                     "scanner": args.scanner,
+                    "repository": args.repo,
                     "product": args.product,
                     "team": args.team,
                     "findings": data,

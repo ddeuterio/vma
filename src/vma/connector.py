@@ -124,6 +124,12 @@ queries = {
             last_fetched = EXCLUDED.last_fetched,
             chcksum = EXCLUDED.chcksum;    
     """,
+    "delete_vulnerability": """
+        DELETE FROM
+            vulnerabilities
+        WHERE
+            cve_id = $1;
+    """,
     "get_products": """
         SELECT
             id, description, team
@@ -153,12 +159,70 @@ queries = {
         RETURNING
             id;
     """,
+    "update_product": """
+        UPDATE
+            products
+        SET
+            description = $1
+        WHERE
+            id = $2 AND
+            team = $3
+        RETURNING
+            id;
+    """,
     "delete_product": """
         DELETE FROM
             products
         WHERE
             id = $1 AND
             team = $2;
+    """,
+    "get_repositories": """
+        SELECT
+            product, team, name, url
+        FROM
+            repositories
+        WHERE
+            team = ANY($1)
+        ORDER BY
+            product, name;
+    """,
+    "get_repositories_by_product": """
+        SELECT
+            product, team, name, url
+        FROM
+            repositories
+        WHERE
+            product = $1 AND
+            team = ANY($2)
+        ORDER BY
+            name;
+    """,
+    "get_repositories_by_name": """
+        SELECT
+            product, team, name, url
+        FROM
+            repositories
+        WHERE
+            name = $1 AND
+            product = $2 AND
+            team = $3;
+    """,
+    "insert_repository": """
+        INSERT INTO
+            repositories (product, team, name, url)
+        VALUES
+            ($1, $2, $3, $4)
+        RETURNING
+            name;
+    """,
+    "delete_repository": """
+        DELETE FROM
+            repositories
+        WHERE
+            team = $1 AND
+            product = $2 AND
+            name = $3;
     """,
     "get_images": """
         SELECT
@@ -308,16 +372,6 @@ queries = {
             iv.cve,
             iv.affected_component;
     """,
-    "insert_image_vulnerabilities": """
-        INSERT INTO image_vulnerabilities
-            (scanner, image_name, image_version, product, team, cve, fix_versions, affected_component_type, affected_component, affected_version, affected_path)
-        VALUES
-            $1
-        ON CONFLICT
-            (scanner, image_name, image_version, product, team, cve, affected_component_type, affected_component)
-        DO UPDATE SET
-            last_seen = EXCLUDED.last_seen;
-    """,
     "compare_image_versions": """
         WITH image_a AS (
             SELECT DISTINCT
@@ -455,6 +509,16 @@ queries = {
             teams (name, description)
         VALUES
             ($1, $2)
+        RETURNING
+            name;
+    """,
+    "update_team": """
+        UPDATE
+            teams
+        SET
+            description = $1
+        WHERE
+            name = $2
         RETURNING
             name;
     """,
@@ -645,6 +709,9 @@ queries = {
             (osv_id, name, contact, credit_type)
         VALUES ($1, $2, $3, $4);
     """,
+    "delete_osv_by_id": """
+        DELETE FROM osv_vulnerabilities WHERE osv_id = $1;
+    """,
     "delete_osv_references": """
         DELETE FROM osv_references WHERE osv_id = $1;
     """,
@@ -740,6 +807,13 @@ queries = {
         WHERE
             nv.cve_id = $1;
     """,
+    "delete_vulnerability_sca": """
+        DELETE FROM vulnerabilities_sca
+        WHERE
+            scanner = $1 AND vuln_id = $2 AND image_name = $3 AND
+            image_version = $4 AND product = $5 AND team = $6 AND
+            affected_component = $7 AND affected_version = $8;
+    """,
     "insert_vulnerability_sca": """
         INSERT INTO vulnerabilities_sca
             (scanner, vuln_id, source, image_name, image_version, product, team,
@@ -804,14 +878,14 @@ queries = {
     """,
     "insert_vulnerability_sast": """
         INSERT INTO vulnerabilities_sast
-            (scanner, rule_id, product, team, file_path,
+            (scanner, rule_id, repository, product, team, file_path,
              start_line, start_col, end_line, end_col,
              message, severity, confidence, code_snippet, suggested_fix, fingerprint,
              cwes, owasp, refs, category, subcategory, technology,
              vulnerability_class, impact, likelihood, engine_kind, validation_state)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
-        ON CONFLICT (scanner, rule_id, product, team, file_path, start_line, start_col)
+                $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+        ON CONFLICT (scanner, rule_id, product, team, repository, file_path, start_line, start_col)
         DO UPDATE SET
             end_line = EXCLUDED.end_line,
             end_col = EXCLUDED.end_col,
@@ -834,8 +908,26 @@ queries = {
             validation_state = EXCLUDED.validation_state,
             last_seen = now();
     """,
+    "get_vulnerabilities_sast_by_repo": """
+        SELECT scanner, rule_id, repository, product, team, file_path,
+               start_line, start_col, end_line, end_col,
+               message, severity, confidence, code_snippet, suggested_fix, fingerprint,
+               cwes, owasp, refs, category, subcategory, technology,
+               vulnerability_class, impact, likelihood, engine_kind, validation_state,
+               first_seen, last_seen
+        FROM vulnerabilities_sast
+        WHERE repository = $1 AND product = $2 AND team = $3
+        ORDER BY
+            CASE severity
+                WHEN 'ERROR' THEN 1
+                WHEN 'WARNING' THEN 2
+                WHEN 'INFO' THEN 3
+                ELSE 4
+            END,
+            rule_id;
+    """,
     "get_vulnerabilities_sast_by_product": """
-        SELECT scanner, rule_id, product, team, file_path,
+        SELECT scanner, rule_id, repository, product, team, file_path,
                start_line, start_col, end_line, end_col,
                message, severity, confidence, code_snippet, suggested_fix, fingerprint,
                cwes, owasp, refs, category, subcategory, technology,
@@ -853,7 +945,7 @@ queries = {
             rule_id;
     """,
     "get_vulnerabilities_sast_by_team": """
-        SELECT scanner, rule_id, product, team, file_path,
+        SELECT scanner, rule_id, repository, product, team, file_path,
                start_line, start_col, end_line, end_col,
                message, severity, confidence, code_snippet, suggested_fix, fingerprint,
                cwes, owasp, refs, category, subcategory, technology,
@@ -871,7 +963,7 @@ queries = {
             product, rule_id;
     """,
     "get_vulnerability_sast_by_rule": """
-        SELECT scanner, rule_id, product, team, file_path,
+        SELECT scanner, rule_id, repository, product, team, file_path,
                start_line, start_col, end_line, end_col,
                message, severity, confidence, code_snippet, suggested_fix, fingerprint,
                cwes, owasp, refs, category, subcategory, technology,
@@ -883,7 +975,7 @@ queries = {
     """,
     "delete_vulnerabilities_sast_by_product": """
         DELETE FROM vulnerabilities_sast
-        WHERE product = $1 AND team = $2;
+        WHERE repository = $1 AND product = $2 AND team = $3;
     """,
     "get_sast_stats_by_team": """
         SELECT
@@ -1050,6 +1142,35 @@ async def insert_vulnerabilities(data_cve: list, data_cvss: list) -> dict:
     return {"status": res, "result": {"num_cve": len(data_cve)}}
 
 
+async def delete_vulnerability(id: str) -> dict:
+    """
+    Delete a vulnerability
+
+    Args:
+        id
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": None}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                q = await conn.execute(queries["delete_vulnerability"], id)
+            if not q.rowcount:
+                res["status"] = False
+            else:
+                res["result"] = {"deleted_rows": q.rowcount}
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error: {e}")
+        res = {"status": False, "result": None}
+    except Exception as e:
+        logger.error(f"DB error: {e}")
+        res = {"status": False, "result": None}
+    return res
+
+
 async def get_vulnerabilities_by_id(id: str) -> dict:
     """
     Get vulnerabilities based on CVE ID pattern.
@@ -1169,6 +1290,39 @@ async def insert_product(name: str, description: str, team: str) -> dict:
     return res
 
 
+async def update_product(name: str, description: str, team: str) -> dict:
+    """
+    Update a product description
+
+    Args:
+        product name (id)
+        product description
+        team
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": None}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            q = await conn.fetchrow(queries["update_product"], description, name, team)
+
+        if q:
+            res["result"] = {"id": q[0]}
+            logger.debug(f"Product with name {q[0]} was updated")
+        else:
+            res["status"] = False
+            logger.debug("Failed updating the product")
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error: {e}")
+        res = {"status": False, "result": None}
+    except Exception as e:
+        logger.error(f"DB error: {e}")
+        res = {"status": False, "result": None}
+    return res
+
+
 async def delete_product(id: str, team: str) -> dict:
     """
     Delete a product
@@ -1186,6 +1340,126 @@ async def delete_product(id: str, team: str) -> dict:
         async with pool.acquire() as conn:
             async with conn.transaction():
                 q = await conn.execute(queries["delete_product"], id, team)
+            if not q.rowcount:
+                res["status"] = False
+            else:
+                res["result"] = {"deleted_rows": q.rowcount}
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error: {e}")
+        res = {"status": False, "result": None}
+    except Exception as e:
+        logger.error(f"DB error: {e}")
+        res = {"status": False, "result": None}
+    return res
+
+
+async def get_repositories(
+    teams: list, product: Optional[str] = None, name: Optional[str] = None
+) -> dict:
+    """
+    Retrieve repositories
+
+    Args:
+        list of teams
+        product
+        name
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": []}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            if product and name:
+                q = await conn.fetch(
+                    queries["get_repositories_by_name"], name, product, teams[0]
+                )
+            elif product:
+                q = await conn.fetch(
+                    queries["get_repositories_by_product"], product, teams
+                )
+            else:
+                q = await conn.fetch(queries["get_repositories"], teams)
+
+        if not q:
+            logger.debug("No repositories were found")
+        else:
+            logger.debug(f"A total of {len(q)} repositories were found")
+            for repo in q:
+                res["result"].append(
+                    {
+                        "product": repo[0],
+                        "team": repo[1],
+                        "name": repo[2],
+                        "url": repo[3],
+                    }
+                )
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error: {e}")
+        res = {"status": False, "result": None}
+    except Exception as e:
+        logger.error(f"DB error: {e}")
+        res = {"status": False, "result": None}
+    return res
+
+
+async def insert_repository(product: str, team: str, name: str, url: str) -> dict:
+    """
+    Insert a repository
+
+    Args:
+        product
+        team
+        name
+        url
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": None}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            q = await conn.fetchrow(
+                queries["insert_repository"], product, team, name, url
+            )
+
+        if q:
+            res["result"] = {"name": q[0]}
+            logger.debug(f"New repository with name {q[0]} was created")
+        else:
+            res["status"] = False
+            logger.debug("Failed creating the repository")
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error: {e}")
+        res = {"status": False, "result": None}
+    except Exception as e:
+        logger.error(f"DB error: {e}")
+        res = {"status": False, "result": None}
+    return res
+
+
+async def delete_repository(team: str, product: str, name: str) -> dict:
+    """
+    Delete a repository
+
+    Args:
+        team
+        product
+        name
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": None}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                q = await conn.execute(
+                    queries["delete_repository"], team, product, name
+                )
             if not q.rowcount:
                 res["status"] = False
             else:
@@ -1300,6 +1574,56 @@ async def insert_image(name: str, version: str, product: str, team: str) -> dict
     return res
 
 
+async def delete_image(team, product, name=None, version=None) -> dict:
+    """
+    Deletes images
+
+    Args:
+        team
+        product: id
+        name: image name
+        version: image version
+        team
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": None}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                q = None
+                if version and name:
+                    q = await conn.execute(
+                        queries["delete_image_by_name_version"],
+                        name,
+                        version,
+                        product,
+                        team,
+                    )
+                elif name:
+                    q = await conn.execute(
+                        queries["delete_image_by_name"], name, product, team
+                    )
+
+            if not q or q.rowcount < 1:
+                logger.error(
+                    f"Image could not be deleted properly {name} {product} {team}"
+                )
+                res["status"] = False
+            else:
+                logger.debug(f"Image was deleted properly {name} {product} {team}")
+                res["result"] = {"deleted_rows": q.rowcount}
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error: {e}")
+        res = {"status": False, "result": None}
+    except Exception as e:
+        logger.error(f"DB error: {e}")
+        res = {"status": False, "result": None}
+    return res
+
+
 async def get_image_vulnerabilities(
     product: str, name: str, version: str, team: str
 ) -> dict:
@@ -1326,44 +1650,6 @@ async def get_image_vulnerabilities(
         logger.debug(
             f"A total of {len(q)} vulns for image {team}/{product} {name}:{version}"
         )
-    except asyncpg.PostgresError as e:
-        logger.error(f"PSQL error: {e}")
-        res = {"status": False, "result": None}
-    except Exception as e:
-        logger.error(f"DB error: {e}")
-        res = {"status": False, "result": None}
-    return res
-
-
-async def insert_image_vulnerabilities(values: list) -> dict:
-    """
-    Bind a vulnerability with an image
-
-    Args:
-        scanner
-        image_name
-        image_version
-        product
-        team
-        cve
-        fix_versions
-        first_seen
-        last_seen
-        affected_component_type
-        affectred_component
-        affected_version
-        affected_path
-    Returns:
-        dict structure with 'status' and 'result'
-    """
-    pool = await get_pool()
-    try:
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                await conn.executemany(queries["insert_image_vulnerabilities"], values)
-
-        logger.debug(f"A total of {len(values)} have been inserted")
-        res = {"status": True, "result": {"num_cve": len(values)}}
     except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
@@ -1410,56 +1696,6 @@ async def compare_image_versions(
         else:
             res["result"] = q
             logger.debug("Data from the two versions gotten")
-    except asyncpg.PostgresError as e:
-        logger.error(f"PSQL error: {e}")
-        res = {"status": False, "result": None}
-    except Exception as e:
-        logger.error(f"DB error: {e}")
-        res = {"status": False, "result": None}
-    return res
-
-
-async def delete_image(team, product, name=None, version=None) -> dict:
-    """
-    Deletes images
-
-    Args:
-        team
-        product: id
-        name: image name
-        version: image version
-        team
-
-    Returns:
-        dict structure with 'status' and 'result'
-    """
-    res = {"status": True, "result": None}
-    pool = await get_pool()
-    try:
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                q = None
-                if version and name:
-                    q = await conn.execute(
-                        queries["delete_image_by_name_version"],
-                        name,
-                        version,
-                        product,
-                        team,
-                    )
-                elif name:
-                    q = await conn.execute(
-                        queries["delete_image_by_name"], name, product, team
-                    )
-
-            if not q or q.rowcount < 1:
-                logger.error(
-                    f"Image could not be deleted properly {name} {product} {team}"
-                )
-                res["status"] = False
-            else:
-                logger.debug(f"Image was deleted properly {name} {product} {team}")
-                res["result"] = {"deleted_rows": q.rowcount}
     except asyncpg.PostgresError as e:
         logger.error(f"PSQL error: {e}")
         res = {"status": False, "result": None}
@@ -1794,6 +2030,37 @@ async def insert_teams(name: str, description: str = "") -> dict:
     return res
 
 
+async def update_team(name: str, description: str) -> dict:
+    """
+    Update a team description
+
+    Args:
+        name
+        description
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": None}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            q = await conn.fetchrow(queries["update_team"], description, name)
+
+        if q:
+            res["result"] = {"name": q[0]}
+            logger.debug(f"Team with name {q[0]} was updated")
+        else:
+            res["status"] = False
+            logger.debug("Failed updating the team")
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error: {e}")
+        res = {"status": False, "result": None}
+    except Exception as e:
+        logger.error(f"DB error: {e}")
+        res = {"status": False, "result": None}
+    return res
+
+
 async def delete_team(id) -> dict:
     """
     Deletes a team
@@ -2118,6 +2385,37 @@ async def update_token_last_used(token_id: int) -> dict:
     return res
 
 
+async def delete_api_token(token_id: str) -> dict:
+    """
+    Delete api token by id
+
+    Args:
+        token_id: ID of token to delete
+
+    Returns:
+        dict: {"status": bool}
+    """
+    res = {"status": False, "result": None}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                q = await conn.execute(queries["delete_api_token"], token_id)
+
+            if not q.rowcount:
+                logger.error(f"Token with id {id} could not be removed")
+                res["result"] = "Token could not be removed"
+                res["status"] = False
+            else:
+                logger.debug(f"Token with id {id} was removed")
+                res["result"] = {"deleted_rows": q.rowcount}
+                res["status"] = True
+    except Exception as e:
+        logger.error(f"Error deleting API token: {e}")
+        res["result"] = str(e)
+    return res
+
+
 async def insert_osv_data(
     data_vuln: list,
     data_aliases: list,
@@ -2308,6 +2606,37 @@ async def get_osv_by_ilike_id(osv_id: str) -> dict:
         logger.error(f"Error getting OSV: {e}")
         res["status"] = False
         res["result"] = []
+    return res
+
+
+async def delete_osv_by_id(osv_id: str) -> dict:
+    """
+    Delete a vulnerability
+
+    Args:
+        id
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": None}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                q = await conn.execute(queries["delete_osv_by_id"], osv_id)
+            if not q.rowcount:
+                logger.error(f"OSV vulnerability with id {osv_id} could not be deleted")
+                res["status"] = False
+            else:
+                logger.debug(f"OSV vulnerability with id {osv_id} has been deleted")
+                res["result"] = {"deleted_rows": q.rowcount}
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error: {e}")
+        res = {"status": False, "result": None}
+    except Exception as e:
+        logger.error(f"DB error: {e}")
+        res = {"status": False, "result": None}
     return res
 
 
@@ -2617,45 +2946,97 @@ async def get_vulnerability_sca_by_id(vuln_id: str, team: str) -> dict:
     return res
 
 
+async def delete_vulnerability_sca(
+    scanner: str,
+    vuln_id: str,
+    image_name: str,
+    image_version: str,
+    product: str,
+    team: str,
+    affected_component: str,
+    affected_version: str,
+) -> dict:
+    """
+    Delete a vulnerability
+
+    Args:
+        id
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": None}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                q = await conn.execute(
+                    queries["delete_vulnerability_sca"],
+                    scanner,
+                    vuln_id,
+                    image_name,
+                    image_version,
+                    product,
+                    team,
+                    affected_component,
+                    affected_version,
+                )
+            if not q.rowcount:
+                logger.error(
+                    f"SCA vulnerability {scanner}-{vuln_id}-{image_name}-{image_version}-{product}-{team}-{affected_component}-{affected_version} could not be deleted"
+                )
+                res["status"] = False
+            else:
+                logger.debug(
+                    f"SCA vulnerability {scanner}-{vuln_id}-{image_name}-{image_version}-{product}-{team}-{affected_component}-{affected_version} has been deleted"
+                )
+                res["result"] = {"deleted_rows": q.rowcount}
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error: {e}")
+        res = {"status": False, "result": None}
+    except Exception as e:
+        logger.error(f"DB error: {e}")
+        res = {"status": False, "result": None}
+    return res
+
+
 def _row_to_sast_dict(row) -> dict:
     """Convert an asyncpg Row from vulnerabilities_sast to a dict."""
     return {
         "scanner": row[0],
         "rule_id": row[1],
-        "product": row[2],
-        "team": row[3],
-        "file_path": row[4],
-        "start_line": row[5],
-        "start_col": row[6],
-        "end_line": row[7],
-        "end_col": row[8],
-        "message": row[9],
-        "severity": row[10],
-        "confidence": row[11],
-        "code_snippet": row[12],
-        "suggested_fix": row[13],
-        "fingerprint": row[14],
-        "cwes": row[15],
-        "owasp": row[16],
-        "refs": row[17],
-        "category": row[18],
-        "subcategory": row[19],
-        "technology": row[20],
-        "vulnerability_class": row[21],
-        "impact": row[22],
-        "likelihood": row[23],
-        "engine_kind": row[24],
-        "validation_state": row[25],
-        "first_seen": str(row[26]) if row[26] else None,
-        "last_seen": str(row[27]) if row[27] else None,
+        "repository": row[2],
+        "product": row[3],
+        "team": row[4],
+        "file_path": row[5],
+        "start_line": row[6],
+        "start_col": row[7],
+        "end_line": row[8],
+        "end_col": row[9],
+        "message": row[10],
+        "severity": row[11],
+        "confidence": row[12],
+        "code_snippet": row[13],
+        "suggested_fix": row[14],
+        "fingerprint": row[15],
+        "cwes": row[16],
+        "owasp": row[17],
+        "refs": row[18],
+        "category": row[19],
+        "subcategory": row[20],
+        "technology": row[21],
+        "vulnerability_class": row[22],
+        "impact": row[23],
+        "likelihood": row[24],
+        "engine_kind": row[25],
+        "validation_state": row[26],
+        "first_seen": str(row[27]) if row[27] else None,
+        "last_seen": str(row[28]) if row[28] else None,
     }
 
 
 async def insert_vulnerabilities_sast_batch(
-    findings: list[dict],
-    product: str,
-    team: str,
-    scanner: str,
+    findings: list[dict], product: str, team: str, scanner: str, repo: str
 ) -> dict:
     """
     Batch insert SAST findings.
@@ -2678,6 +3059,7 @@ async def insert_vulnerabilities_sast_batch(
                 (
                     scanner,
                     f["rule_id"],
+                    repo,
                     product,
                     team,
                     f["file_path"],
@@ -2716,6 +3098,43 @@ async def insert_vulnerabilities_sast_batch(
         res = {"status": False, "result": str(e)}
     except Exception as e:
         logger.error(f"Error in insert_vulnerabilities_sast_batch: {e}")
+        res = {"status": False, "result": str(e)}
+    return res
+
+
+async def get_vulnerabilities_sast_by_repo(repo: str, product: str, team: str) -> dict:
+    """
+    Get all SAST findings for a product.
+
+    Args:
+        product: Product ID
+        team: Team name
+
+    Returns:
+        dict structure with 'status' and 'result'
+    """
+    res = {"status": True, "result": []}
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            await conn.set_type_codec(
+                "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+            )
+            rows = await conn.fetch(
+                queries["get_vulnerabilities_sast_by_repo"], repo, product, team
+            )
+
+        if rows:
+            for row in rows:
+                res["result"].append(_row_to_sast_dict(row))
+        logger.debug(
+            f"Found {len(res['result'])} SAST findings for {product} in team {team}"
+        )
+    except asyncpg.PostgresError as e:
+        logger.error(f"PSQL error in get_vulnerabilities_sast_by_repo: {e}")
+        res = {"status": False, "result": str(e)}
+    except Exception as e:
+        logger.error(f"Error in get_vulnerabilities_sast_by_repo: {e}")
         res = {"status": False, "result": str(e)}
     return res
 
@@ -2826,7 +3245,9 @@ async def get_vulnerability_sast_by_rule(rule_id: str, team: str) -> dict:
     return res
 
 
-async def delete_vulnerabilities_sast_by_product(product: str, team: str) -> dict:
+async def delete_vulnerabilities_sast_by_repo(
+    product: str, team: str, repo: str
+) -> dict:
     """
     Delete all SAST findings for a product.
 
@@ -2843,7 +3264,10 @@ async def delete_vulnerabilities_sast_by_product(product: str, team: str) -> dic
         async with pool.acquire() as conn:
             async with conn.transaction():
                 q = await conn.execute(
-                    queries["delete_vulnerabilities_sast_by_product"], product, team
+                    queries["delete_vulnerabilities_sast_by_product"],
+                    repo,
+                    product,
+                    team,
                 )
             res["result"] = {"deleted_rows": int(q.split()[-1])}
             logger.debug(f"Deleted SAST findings for {product} in team {team}")
