@@ -54,3 +54,4 @@ MANIFEST
 .python-version
 .env
 dev-docker/*
+dev-tests/*
