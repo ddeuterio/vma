@@ -337,6 +337,43 @@ Get vulnerabilities for a specific image.
 }
 ```
 
+## Repositories
+
+### POST /repo
+Create a repository record.
+
+**Permission**: WRITE or ADMIN on the product's team
+
+**Request Body**:
+```json
+{
+  "product": "my-application",
+  "team": "engineering",
+  "name": "backend-service",
+  "url": "https://github.com/org/backend-service"
+}
+```
+
+### GET /repo/{team}
+Get all repositories for a team.
+
+**Permission**: READ_ONLY or higher on the team
+
+### GET /repo/{team}/{product}
+Get repositories for a product.
+
+**Permission**: READ_ONLY or higher on the team
+
+### GET /repo/{team}/{product}/{name}
+Get a repository by name.
+
+**Permission**: READ_ONLY or higher on the team
+
+### DELETE /repo/{team}/{product}/{name}
+Delete a repository.
+
+**Permission**: ADMIN on the team
+
 ### GET /cve/{cve_id}
 Get detailed information about a specific CVE.
 
