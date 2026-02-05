@@ -174,16 +174,19 @@ async def parse_osv_file(path):
             logger.error(f"OSV file {path} missing required 'modified' field")
             return [[], [], [], [], [], []]
         else:
+            modified = modified.replace("Z", "+00:00")
             modified = datetime.fromisoformat(modified).astimezone()
 
         # Published timestamp (optional)
         published = osv_data.get("published", None)
         if published:
+            published = published.replace("Z", "+00:00")
             published = datetime.fromisoformat(published).astimezone()
 
         # Withdrawn timestamp (optional)
         withdrawn = osv_data.get("withdrawn", None)
         if withdrawn:
+            withdrawn = withdrawn.replace("Z", "+00:00")
             withdrawn = datetime.fromisoformat(withdrawn).astimezone()
 
         # Summary (optional)
