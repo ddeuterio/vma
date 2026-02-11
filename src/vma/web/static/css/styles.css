@@ -1169,6 +1169,7 @@ body {
 
 .comparison-results .table-subtitle {
     margin-top: 6px;
+    padding-bottom: 6px;
 }
 
 .compare-summary {
@@ -1239,6 +1240,10 @@ body {
     border-radius: 12px;
     box-shadow: var(--shadow-sm);
     min-height: 220px;
+}
+
+.results-card[hidden] {
+    display: none;
 }
 
 .results-card .cve-card + .cve-card {

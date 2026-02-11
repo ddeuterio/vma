@@ -52,6 +52,7 @@
 
         const wrapper = createElementWithAttrs('section', '', { class: 'products-page' });
 
+        // List view toolbar
         const toolbar = createToolbar({
             title: 'Products',
             buttons: [
@@ -129,55 +130,64 @@
             feedbackAttribute: 'data-product-list-feedback'
         });
 
-        const detailCard = createElementWithAttrs('div', '', {
-            class: 'table-card page-section',
-            hidden: true,
-            'data-product-detail-card': ''
-        });
-        detailCard.innerHTML = `
-            <div class="table-header table-header--stacked">
-                <div>
-                    <h2 data-product-detail-title>Product Details</h2>
-                    <p class="table-subtitle" data-product-detail-meta></p>
-                </div>
-                <div class="table-header__actions">
-                    <button type="button" class="btn link" data-product-detail-back>
-                        <i class="fas fa-arrow-left"></i>
-                        Go back
-                    </button>
-                </div>
+        // Edit view (separate full-page view)
+        const editView = createElementWithAttrs('div', '', { class: 'edit-view', 'data-edit-view': '', hidden: true });
+        const editViewHeader = createElementWithAttrs('div', '', { class: 'toolbar page-section' });
+        editViewHeader.innerHTML = `
+            <h2>Edit Product</h2>
+            <div class="toolbar-actions">
+                <button type="button" class="btn secondary" data-back-to-list>
+                    <i class="fas fa-arrow-left"></i> Back to Products
+                </button>
             </div>
-            <form data-product-update-form>
+        `;
+
+        const editCard = createElementWithAttrs('div', '', { class: 'form-card page-section' });
+        editCard.innerHTML = `
+            <form data-product-edit-form>
                 <div class="form-group">
-                    <label for="product-detail-id">Product ID</label>
-                    <input type="text" id="product-detail-id" name="id" disabled>
+                    <label for="product-edit-id">Product ID</label>
+                    <input type="text" id="product-edit-id" name="id" disabled>
                 </div>
                 <div class="form-group">
-                    <label for="product-detail-team">Team</label>
-                    <input type="text" id="product-detail-team" name="team" disabled>
+                    <label for="product-edit-team">Team</label>
+                    <input type="text" id="product-edit-team" name="team" disabled>
                 </div>
                 <div class="form-group">
-                    <label for="product-detail-description">Description</label>
-                    <textarea id="product-detail-description" name="description" rows="3" placeholder="Add a description" required></textarea>
+                    <label for="product-edit-description">Description</label>
+                    <textarea id="product-edit-description" name="description" rows="3" placeholder="Add a description"></textarea>
                 </div>
                 <div class="form-actions">
                     <button type="submit" class="btn primary">
                         <i class="fas fa-save"></i>
                         Update Product
                     </button>
+                    <button type="button" class="btn secondary" data-product-edit-cancel>Cancel</button>
                 </div>
             </form>
-            <div class="inline-message" data-product-update-feedback hidden></div>
+            <div class="inline-message" data-product-edit-feedback hidden></div>
         `;
 
-        wrapper.appendChild(toolbar);
-        wrapper.appendChild(formCard);
-        wrapper.appendChild(deleteCard);
-        wrapper.appendChild(listCard);
-        wrapper.appendChild(detailCard);
+        // List view (contains toolbar, create/delete forms, and table)
+        const listView = createElementWithAttrs('div', '', { class: 'list-view', 'data-list-view': '' });
+        listView.appendChild(toolbar);
+        listView.appendChild(formCard);
+        listView.appendChild(deleteCard);
+        listView.appendChild(listCard);
+
+        // Edit view assembly
+        editView.appendChild(editViewHeader);
+        editView.appendChild(editCard);
+
+        wrapper.appendChild(listView);
+        wrapper.appendChild(editView);
         root.appendChild(wrapper);
 
         return {
+            listView,
+            editView,
+            backToListBtn: editViewHeader.querySelector('[data-back-to-list]'),
+            toolbar,
             toggleFormButton,
             toggleDeleteButton,
             formCard,
@@ -192,21 +202,19 @@
             deleteFeedback: deleteCard.querySelector('[data-product-delete-feedback]'),
             deleteSelect: deleteCard.querySelector('#product-delete-id'),
             teamSelect: formCard.querySelector('#product-team'),
-            detailCard,
-            detailBackButton: detailCard.querySelector('[data-product-detail-back]'),
-            detailTitle: detailCard.querySelector('[data-product-detail-title]'),
-            detailMeta: detailCard.querySelector('[data-product-detail-meta]'),
-            updateForm: detailCard.querySelector('[data-product-update-form]'),
-            updateFeedback: detailCard.querySelector('[data-product-update-feedback]'),
-            detailIdInput: detailCard.querySelector('#product-detail-id'),
-            detailTeamInput: detailCard.querySelector('#product-detail-team'),
-            detailDescriptionInput: detailCard.querySelector('#product-detail-description'),
-            currentProduct: null,
-            view: 'list'
+            editCard,
+            editForm: editCard.querySelector('[data-product-edit-form]'),
+            editFeedback: editCard.querySelector('[data-product-edit-feedback]'),
+            editCancel: editCard.querySelector('[data-product-edit-cancel]'),
+            editIdInput: editCard.querySelector('#product-edit-id'),
+            editTeamInput: editCard.querySelector('#product-edit-team'),
+            editDescriptionInput: editCard.querySelector('#product-edit-description'),
+            editingProductId: null,
+            editingProductTeam: null
         };
     }
 
-    function renderRows(rowsBody, counter, items, onRowClick) {
+    function renderRows(rowsBody, counter, items) {
         if (!rowsBody || !counter) {
             return;
         }
@@ -231,78 +239,62 @@
             row.appendChild(createElementWithAttrs('td', id || '—'));
             row.appendChild(createElementWithAttrs('td', description || '—'));
             row.appendChild(createElementWithAttrs('td', team || '—'));
-            if (id && team && typeof onRowClick === 'function') {
+            if (id && team) {
                 row.setAttribute('data-product-id', id);
                 row.setAttribute('data-product-team', team);
                 row.setAttribute('data-product-description', description || '');
-                row.addEventListener('click', () => onRowClick({
-                    id,
-                    description: description || '',
-                    team
-                }));
             }
             rowsBody.appendChild(row);
         });
         counter.textContent = items.length;
     }
 
-    function switchToDetailView(state, product) {
-        state.view = 'detail';
-        state.currentProduct = product;
-        if (state.listCard) {
-            state.listCard.hidden = true;
+    function showListView(state) {
+        if (state.listView) {
+            state.listView.hidden = false;
         }
-        if (state.formCard) {
-            state.formCard.hidden = true;
-        }
-        if (state.deleteCard) {
-            state.deleteCard.hidden = true;
-        }
-        if (state.detailCard) {
-            state.detailCard.hidden = false;
-        }
-        if (state.detailTitle) {
-            state.detailTitle.textContent = product?.id ? `Product · ${product.id}` : 'Product Details';
-        }
-        if (state.detailMeta) {
-            state.detailMeta.textContent = product?.team ? `Team: ${product.team}` : '';
-        }
-        if (state.detailIdInput) {
-            state.detailIdInput.value = product?.id || '';
-        }
-        if (state.detailTeamInput) {
-            state.detailTeamInput.value = product?.team || '';
-        }
-        if (state.detailDescriptionInput) {
-            state.detailDescriptionInput.value = product?.description || '';
-        }
-        if (state.updateFeedback) {
-            state.updateFeedback.hidden = true;
-            state.updateFeedback.textContent = '';
-        }
-        setPageTitle?.(product?.id ? `Products · ${product.id}` : 'Products');
-    }
-
-    function switchToListView(state) {
-        state.view = 'list';
-        state.currentProduct = null;
-        if (state.detailCard) {
-            state.detailCard.hidden = true;
-        }
-        if (state.listCard) {
-            state.listCard.hidden = false;
-        }
-        if (state.formCard) {
-            state.formCard.hidden = false;
-        }
-        if (state.deleteCard) {
-            state.deleteCard.hidden = false;
-        }
-        if (state.updateFeedback) {
-            state.updateFeedback.hidden = true;
-            state.updateFeedback.textContent = '';
+        if (state.editView) {
+            state.editView.hidden = true;
         }
         setPageTitle?.('Products');
+    }
+
+    function showEditView(state) {
+        if (state.listView) {
+            state.listView.hidden = true;
+        }
+        if (state.editView) {
+            state.editView.hidden = false;
+        }
+    }
+
+    function hideEditForm(state) {
+        showListView(state);
+        state.editingProductId = null;
+        state.editingProductTeam = null;
+        state.editForm?.reset();
+    }
+
+    function populateEditForm(state, product) {
+        if (!state.editCard) {
+            return;
+        }
+        state.editingProductId = product.id;
+        state.editingProductTeam = product.team;
+
+        if (state.editIdInput) {
+            state.editIdInput.value = product.id || '';
+        }
+        if (state.editTeamInput) {
+            state.editTeamInput.value = product.team || '';
+        }
+        if (state.editDescriptionInput) {
+            state.editDescriptionInput.value = product.description || '';
+        }
+
+        showEditView(state);
+        setPageTitle?.(`Products · ${product.id}`);
+        state.editDescriptionInput?.focus();
     }
 
     function populateTeamOptions(state, teams) {
@@ -376,9 +368,7 @@
         try {
             const payload = await fetchJSON(apiUrl('/products'));
             const products = normalizeApiResponse(payload);
-            renderRows(state.rowsBody, state.counter, products, product => {
-                switchToDetailView(state, product);
-            });
+            renderRows(state.rowsBody, state.counter, products);
             state.productsData = products;
             updateDeleteOptions(state);
         } catch (error) {
@@ -387,26 +377,21 @@
         }
     }
 
-    function handleUpdateForm(state, helpers) {
-        if (!state.updateForm) {
+    function handleEditForm(state, helpers) {
+        if (!state.editForm) {
             return;
         }
 
-        state.updateForm.addEventListener('submit', async event => {
+        state.editForm.addEventListener('submit', async event => {
             event.preventDefault();
-            helpers.update?.hide();
+            helpers.edit?.hide();
 
-            const name = state.detailIdInput?.value?.trim();
-            const team = state.detailTeamInput?.value?.trim();
-            const description = state.detailDescriptionInput?.value?.trim();
+            const name = state.editIdInput?.value?.trim();
+            const team = state.editTeamInput?.value?.trim();
+            const description = state.editDescriptionInput?.value?.trim() || null;
 
             if (!name || !team) {
-                helpers.update?.show('Unable to identify the selected product.', 'error');
-                return;
-            }
-
-            if (!description) {
-                helpers.update?.show('Description is required to update the product.', 'error');
+                helpers.edit?.show('Unable to identify the selected product.', 'error');
                 return;
             }
 
@@ -421,11 +406,46 @@
                 }
 
                 await loadProducts(state, helpers);
-                switchToDetailView(state, { id: name, team, description });
-                helpers.update?.show('Product updated successfully.', 'success');
+                hideEditForm(state);
+                helpers.list?.show(`Product "${name}" updated successfully.`, 'success');
             } catch (error) {
-                helpers.update?.show(error.message || 'Failed to update product.', 'error');
+                helpers.edit?.show(error.message || 'Failed to update product.', 'error');
             }
+        });
+
+        state.editCancel?.addEventListener('click', () => {
+            helpers.edit?.hide();
+            hideEditForm(state);
+        });
+    }
+
+    function attachProductRowInteractions(state, helpers) {
+        if (!state.rowsBody) {
+            return;
+        }
+        state.rowsBody.addEventListener('click', async event => {
+            const row = event.target.closest('tr[data-product-id]');
+            if (!row) {
+                return;
+            }
+            const id = row.getAttribute('data-product-id');
+            const team = row.getAttribute('data-product-team');
+            const description = row.getAttribute('data-product-description') || '';
+            if (!id) {
+                return;
+            }
+            helpers.edit?.hide();
+            populateEditForm(state, { id, team, description });
+        });
+    }
+
+    function setupBackButton(state, helpers) {
+        if (!state.backToListBtn) {
+            return;
+        }
+        state.backToListBtn.addEventListener('click', () => {
+            helpers.edit?.hide();
+            hideEditForm(state);
         });
     }
 
@@ -605,16 +625,17 @@
             form: createMessageHelper(state.feedback, { closeButton: false }),
             list: createMessageHelper(state.listFeedback, { closeButton: false }),
             delete: createMessageHelper(state.deleteFeedback, { closeButton: false }),
-            update: createMessageHelper(state.updateFeedback, { closeButton: false })
+            edit: createMessageHelper(state.editFeedback, { closeButton: false })
         };
 
         loadTeams(state, helpers);
         loadProducts(state, helpers);
         handleSubmit(state, helpers);
-        handleUpdateForm(state, helpers);
+        handleEditForm(state, helpers);
         setupFormToggle(state, helpers);
         setupDeleteToggle(state, helpers);
         handleDeleteForm(state, helpers);
-        state.detailBackButton?.addEventListener('click', () => switchToListView(state));
+        attachProductRowInteractions(state, helpers);
+        setupBackButton(state, helpers);
     });
 })();

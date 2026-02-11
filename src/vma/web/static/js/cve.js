@@ -899,7 +899,7 @@ function renderConfigurationGroups(groups) {
         });
         hero.appendChild(feedback);
 
-        const resultsCard = createElementWithAttrs('section', '', { class: 'results-card' });
+        const resultsCard = createElementWithAttrs('section', '', { class: 'results-card', hidden: true });
         const loadingIndicator = createElementWithAttrs('p', 'Searching…', {
             class: 'empty',
             hidden: true
@@ -937,6 +937,7 @@ function renderConfigurationGroups(groups) {
             loadingIndicator,
             noResults,
             resultsList,
+            resultsCard,
             wrapper
         };
     }
@@ -1023,6 +1024,7 @@ function renderConfigurationGroups(groups) {
         const dataSource = state.sourceSelect?.value || 'nvd';
 
         helpers.feedback.hide();
+        state.resultsCard.hidden = false;
         state.loadingIndicator.hidden = false;
         state.noResults.hidden = true;
         state.resultsList.innerHTML = '';

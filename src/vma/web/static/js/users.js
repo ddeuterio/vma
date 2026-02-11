@@ -146,7 +146,7 @@
 
     const { element: listCard, tbody: rowsBody, counter, feedback: listFeedback } = createTableCard({
       title: 'Existing Users',
-      columns: ['Email', 'Name', ''],
+      columns: ['Email', 'Name'],
       dataAttribute: 'data-user-rows',
       countAttribute: 'data-user-count',
       feedbackAttribute: 'data-user-list-feedback'
@@ -342,7 +342,7 @@
     if (!data.length) {
       state.rowsBody.innerHTML = createEmptyState({
         message: 'No users yet.',
-        colspan: 3,
+        colspan: 2,
         context: 'table'
       });
       state.counter.textContent = '0';
@@ -355,15 +355,9 @@
       const row = document.createElement('tr');
       row.appendChild(createElementWithAttrs('td', email));
       row.appendChild(createElementWithAttrs('td', name || '—'));
-      const actionCell = document.createElement('td');
-      const editButton = createElementWithAttrs('button', 'Edit', {
-        type: 'button',
-        class: 'btn link',
-        'data-user-action': 'edit',
-        'data-user-email': email
-      });
-      actionCell.appendChild(editButton);
-      row.appendChild(actionCell);
+      if (email && email !== '—') {
+        row.setAttribute('data-user-email', email);
+      }
       state.rowsBody.appendChild(row);
     });
     state.counter.textContent = String(data.length);
@@ -600,7 +594,7 @@
     if (!state.rowsBody) {
       return;
     }
-    state.rowsBody.innerHTML = '<tr><td colspan="3" class="empty">Loading…</td></tr>';
+    state.rowsBody.innerHTML = '<tr><td colspan="2" class="empty">Loading…</td></tr>';
     helpers.list.hide();
     helpers.create.hide();
     helpers.delete.hide();
@@ -610,7 +604,7 @@
       renderRows(state);
       updateDeleteOptions(state);
     } catch (error) {
-      state.rowsBody.innerHTML = '<tr><td colspan="3" class="empty">Unable to load users.</td></tr>';
+      state.rowsBody.innerHTML = '<tr><td colspan="2" class="empty">Unable to load users.</td></tr>';
       state.counter.textContent = '0';
       helpers.list.show(error.message || 'Failed to fetch users.', 'error');
     }
@@ -703,11 +697,11 @@
       return;
     }
     state.rowsBody.addEventListener('click', async event => {
-      const button = event.target.closest('[data-user-action="edit"]');
-      if (!button) {
+      const row = event.target.closest('tr[data-user-email]');
+      if (!row) {
         return;
       }
-      const email = button.getAttribute('data-user-email');
+      const email = row.getAttribute('data-user-email');
       if (!email) {
         return;
       }

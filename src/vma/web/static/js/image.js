@@ -1279,22 +1279,28 @@
             </table>
         `;
 
+    // Edit view header (toolbar)
+    const editViewHeader = createElementWithAttrs('div', '', { class: 'toolbar page-section' });
+    editViewHeader.innerHTML = `
+            <div>
+                <h2 data-image-detail-title>Image Vulnerabilities</h2>
+                <p class="toolbar-subtitle" data-image-detail-meta></p>
+            </div>
+            <div class="toolbar-actions">
+                <button type="button" class="btn secondary" data-image-back>
+                    <i class="fas fa-arrow-left"></i> Back to Images
+                </button>
+            </div>
+        `;
+
     const detailCard = createElementWithAttrs('div', '', {
       class: 'table-card page-section',
-      hidden: true,
       'data-image-detail-card': ''
     });
     detailCard.innerHTML = `
-            <div class="table-header table-header--stacked">
-                <div>
-                    <h2 data-image-detail-title>Image Vulnerabilities</h2>
-                    <p class="table-subtitle" data-image-detail-meta></p>
-                </div>
+            <div class="table-header">
+                <h3>Vulnerabilities</h3>
                 <div class="table-header__actions">
-                    <button type="button" class="btn link" data-image-back>
-                        <i class="fas fa-arrow-left"></i>
-                        Go back
-                    </button>
                     <div class="column-toggle-wrapper">
                         <button type="button" class="btn secondary" data-column-toggle-btn>
                             <i class="fas fa-table-columns"></i> Columns
@@ -1333,25 +1339,38 @@
                     <p class="table-subtitle" data-vuln-detail-meta></p>
                 </div>
                 <div class="table-header__actions">
-                    <button type="button" class="btn link" data-vuln-back>
+                    <button type="button" class="btn secondary" data-vuln-back>
                         <i class="fas fa-arrow-left"></i>
-                        Back to vulnerabilities
+                        Back to Vulnerabilities
                     </button>
                 </div>
             </div>
             <div class="vuln-detail-content" data-vuln-detail-content></div>
         `;
 
-    wrapper.appendChild(toolbar);
-    wrapper.appendChild(formCard);
-    wrapper.appendChild(deleteCard);
-    wrapper.appendChild(compareCard);
-    wrapper.appendChild(listCard);
-    wrapper.appendChild(detailCard);
-    wrapper.appendChild(vulnDetailCard);
+    // List view (contains toolbar, create/delete/compare forms, and table)
+    const listView = createElementWithAttrs('div', '', { class: 'list-view', 'data-list-view': '' });
+    listView.appendChild(toolbar);
+    listView.appendChild(formCard);
+    listView.appendChild(deleteCard);
+    listView.appendChild(compareCard);
+    listView.appendChild(listCard);
+
+    // Edit view (detail cards for image vulnerabilities)
+    const editView = createElementWithAttrs('div', '', { class: 'edit-view', 'data-edit-view': '', hidden: true });
+    editView.appendChild(editViewHeader);
+    editView.appendChild(detailCard);
+    editView.appendChild(vulnDetailCard);
+
+    wrapper.appendChild(listView);
+    wrapper.appendChild(editView);
     root.appendChild(wrapper);
 
     return {
+      listView,
+      editView,
+      editViewHeader,
+      toolbar,
       toggleFormButton,
       toggleDeleteButton,
       toggleCompareButton,
@@ -1371,10 +1390,10 @@
       listThead: listCard.querySelector('[data-image-list-thead]'),
       detailFeedback: detailCard.querySelector('[data-image-detail-feedback]'),
       detailRows: detailCard.querySelector('[data-image-detail-rows]'),
-      detailTitle: detailCard.querySelector('[data-image-detail-title]'),
-      detailMeta: detailCard.querySelector('[data-image-detail-meta]'),
+      detailTitle: editViewHeader.querySelector('[data-image-detail-title]'),
+      detailMeta: editViewHeader.querySelector('[data-image-detail-meta]'),
+      detailBackButton: editViewHeader.querySelector('[data-image-back]'),
       detailSearchInput: detailCard.querySelector('[data-image-detail-search]'),
-      detailBackButton: detailCard.querySelector('[data-image-back]'),
       detailThead: detailCard.querySelector('[data-image-detail-thead]'),
       columnToggleBtn: detailCard.querySelector('[data-column-toggle-btn]'),
       columnToggleDropdown: detailCard.querySelector('[data-column-toggle-dropdown]'),
@@ -2415,24 +2434,26 @@
   }
 
   function switchToDetailView(state, imageMeta) {
-    const { listCard, formCard, deleteCard, compareCard, detailCard, detailTitle, detailMeta } = state;
+    const { listView, editView, detailCard, detailTitle, detailMeta, vulnDetailCard } = state;
     state.setCompareVisible?.(false, { suppressListToggle: true, nextView: 'detail' });
     state.view = 'detail';
-    if (listCard) {
-      listCard.hidden = true;
+    state.setFormVisible?.(false);
+    state.setDeleteVisible?.(false);
+
+    // Hide list view, show edit view
+    if (listView) {
+      listView.hidden = true;
     }
-    if (formCard) {
-      formCard.hidden = true;
-    }
-    if (deleteCard) {
-      deleteCard.hidden = true;
-    }
-    if (compareCard) {
-      compareCard.hidden = true;
+    if (editView) {
+      editView.hidden = false;
     }
     if (detailCard) {
       detailCard.hidden = false;
     }
+    if (vulnDetailCard) {
+      vulnDetailCard.hidden = true;
+    }
+
     if (detailTitle) {
       detailTitle.textContent = `${imageMeta.name} · ${imageMeta.version}`;
     }
@@ -2445,24 +2466,18 @@
   }
 
   function switchToListView(state) {
-    const { listCard, formCard, deleteCard, compareCard, detailCard, detailRows, detailFeedback, detailSearchInput } = state;
+    const { listView, editView, detailRows, detailFeedback, detailSearchInput } = state;
     state.view = 'list';
     state.currentVulns = [];
-    if (detailCard) {
-      detailCard.hidden = true;
+
+    // Hide edit view, show list view
+    if (editView) {
+      editView.hidden = true;
     }
-    if (listCard) {
-      listCard.hidden = false;
+    if (listView) {
+      listView.hidden = false;
     }
-    if (formCard) {
-      formCard.hidden = false;
-    }
-    if (deleteCard) {
-      deleteCard.hidden = false;
-    }
-    if (compareCard) {
-      compareCard.hidden = false;
-    }
+
     if (detailRows) {
       const colCount = getVisibleColumns(state).length;
       detailRows.innerHTML = `<tr><td colspan="${colCount}" class="empty">Select an image to view vulnerabilities.</td></tr>`;
@@ -2653,17 +2668,6 @@
       if (visible) {
         state.previousView = state.view || 'list';
         state.view = 'compare';
-        if (!suppressListToggle) {
-          if (state.listCard) {
-            state.listCard.hidden = true;
-          }
-          if (state.formCard) {
-            state.formCard.hidden = true;
-          }
-        }
-        if (state.detailCard) {
-          state.detailCard.hidden = true;
-        }
         helpers.compare?.hide();
         firstField?.focus();
         return;
@@ -2678,35 +2682,10 @@
       }
 
       if (targetView === 'list') {
-        if (!suppressListToggle) {
-          if (state.listCard) {
-            state.listCard.hidden = false;
-          }
-          if (state.formCard) {
-            state.formCard.hidden = false;
-          }
-        }
-        if (state.detailCard) {
-          state.detailCard.hidden = true;
-        }
         compareForm?.reset();
         resetCompareSelections(state);
         resetComparisonResults(state);
         return;
-      }
-
-      if (targetView === 'detail') {
-        if (!suppressListToggle) {
-          if (state.listCard) {
-            state.listCard.hidden = true;
-          }
-          if (state.formCard) {
-            state.formCard.hidden = true;
-          }
-        }
-        if (state.detailCard) {
-          state.detailCard.hidden = false;
-        }
       }
     };
 

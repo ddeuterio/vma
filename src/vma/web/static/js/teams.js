@@ -60,6 +60,7 @@
 
         const wrapper = createElementWithAttrs('section', '', { class: 'teams-page' });
 
+        // List view toolbar
         const toolbar = createToolbar({
             title: 'Teams',
             buttons: [
@@ -131,51 +132,60 @@
             feedbackAttribute: 'data-team-list-feedback'
         });
 
-        const detailCard = createElementWithAttrs('div', '', {
-            class: 'table-card page-section',
-            hidden: true,
-            'data-team-detail-card': ''
-        });
-        detailCard.innerHTML = `
-            <div class="table-header table-header--stacked">
-                <div>
-                    <h2 data-team-detail-title>Team Details</h2>
-                    <p class="table-subtitle" data-team-detail-meta></p>
-                </div>
-                <div class="table-header__actions">
-                    <button type="button" class="btn link" data-team-detail-back>
-                        <i class="fas fa-arrow-left"></i>
-                        Go back
-                    </button>
-                </div>
+        // Edit view (separate full-page view)
+        const editView = createElementWithAttrs('div', '', { class: 'edit-view', 'data-edit-view': '', hidden: true });
+        const editViewHeader = createElementWithAttrs('div', '', { class: 'toolbar page-section' });
+        editViewHeader.innerHTML = `
+            <h2>Edit Team</h2>
+            <div class="toolbar-actions">
+                <button type="button" class="btn secondary" data-back-to-list>
+                    <i class="fas fa-arrow-left"></i> Back to Teams
+                </button>
             </div>
-            <form data-team-update-form>
+        `;
+
+        const editCard = createElementWithAttrs('div', '', { class: 'form-card page-section' });
+        editCard.innerHTML = `
+            <form data-team-edit-form>
                 <div class="form-group">
-                    <label for="team-detail-name">Team name</label>
-                    <input type="text" id="team-detail-name" name="name" disabled>
+                    <label for="team-edit-name">Team name</label>
+                    <input type="text" id="team-edit-name" name="name" disabled>
                 </div>
                 <div class="form-group">
-                    <label for="team-detail-description">Description</label>
-                    <textarea id="team-detail-description" name="description" rows="3" placeholder="Add a description" required></textarea>
+                    <label for="team-edit-description">Description</label>
+                    <textarea id="team-edit-description" name="description" rows="3" placeholder="Add a description"></textarea>
                 </div>
                 <div class="form-actions">
                     <button type="submit" class="btn primary">
                         <i class="fas fa-save"></i>
                         Update Team
                     </button>
+                    <button type="button" class="btn secondary" data-team-edit-cancel>Cancel</button>
                 </div>
             </form>
-            <div class="inline-message" data-team-update-feedback hidden></div>
+            <div class="inline-message" data-team-edit-feedback hidden></div>
         `;
 
-        wrapper.appendChild(toolbar);
-        wrapper.appendChild(createCard);
-        wrapper.appendChild(deleteCard);
-        wrapper.appendChild(listCard);
-        wrapper.appendChild(detailCard);
+        // List view (contains toolbar, create/delete forms, and table)
+        const listView = createElementWithAttrs('div', '', { class: 'list-view', 'data-list-view': '' });
+        listView.appendChild(toolbar);
+        listView.appendChild(createCard);
+        listView.appendChild(deleteCard);
+        listView.appendChild(listCard);
+
+        // Edit view assembly
+        editView.appendChild(editViewHeader);
+        editView.appendChild(editCard);
+
+        wrapper.appendChild(listView);
+        wrapper.appendChild(editView);
         root.appendChild(wrapper);
 
         return {
+            listView,
+            editView,
+            backToListBtn: editViewHeader.querySelector('[data-back-to-list]'),
+            toolbar,
             wrapper,
             createToggle,
             deleteToggle,
@@ -190,17 +200,14 @@
             listCard,
             rowsBody,
             counter,
-            teams: [],
-            detailCard,
-            detailBackButton: detailCard.querySelector('[data-team-detail-back]'),
-            detailTitle: detailCard.querySelector('[data-team-detail-title]'),
-            detailMeta: detailCard.querySelector('[data-team-detail-meta]'),
-            updateForm: detailCard.querySelector('[data-team-update-form]'),
-            updateFeedback: detailCard.querySelector('[data-team-update-feedback]'),
-            detailNameInput: detailCard.querySelector('#team-detail-name'),
-            detailDescriptionInput: detailCard.querySelector('#team-detail-description'),
-            currentTeam: null,
-            view: 'list'
+            editCard,
+            editForm: editCard.querySelector('[data-team-edit-form]'),
+            editFeedback: editCard.querySelector('[data-team-edit-feedback]'),
+            editCancel: editCard.querySelector('[data-team-edit-cancel]'),
+            editNameInput: editCard.querySelector('#team-edit-name'),
+            editDescriptionInput: editCard.querySelector('#team-edit-description'),
+            editingTeamName: null,
+            teams: []
         };
     }
 
@@ -228,72 +235,10 @@
             if (name && name !== '—') {
                 row.setAttribute('data-team-name', name);
                 row.setAttribute('data-team-description', description || '');
-                row.addEventListener('click', () => {
-                    switchToDetailView(state, {
-                        name,
-                        description: description || ''
-                    });
-                });
             }
             state.rowsBody.appendChild(row);
         });
         state.counter.textContent = String(data.length);
-    }
-
-    function switchToDetailView(state, team) {
-        state.view = 'detail';
-        state.currentTeam = team;
-        if (state.listCard) {
-            state.listCard.hidden = true;
-        }
-        if (state.createFormCard) {
-            state.createFormCard.hidden = true;
-        }
-        if (state.deleteFormCard) {
-            state.deleteFormCard.hidden = true;
-        }
-        if (state.detailCard) {
-            state.detailCard.hidden = false;
-        }
-        if (state.detailTitle) {
-            state.detailTitle.textContent = team?.name ? `Team · ${team.name}` : 'Team Details';
-        }
-        if (state.detailMeta) {
-            state.detailMeta.textContent = team?.description ? `Current description: ${team.description}` : 'No description set.';
-        }
-        if (state.detailNameInput) {
-            state.detailNameInput.value = team?.name || '';
-        }
-        if (state.detailDescriptionInput) {
-            state.detailDescriptionInput.value = team?.description || '';
-        }
-        if (state.updateFeedback) {
-            state.updateFeedback.hidden = true;
-            state.updateFeedback.textContent = '';
-        }
-        setPageTitle?.(team?.name ? `Teams · ${team.name}` : 'Teams');
-    }
-
-    function switchToListView(state) {
-        state.view = 'list';
-        state.currentTeam = null;
-        if (state.detailCard) {
-            state.detailCard.hidden = true;
-        }
-        if (state.listCard) {
-            state.listCard.hidden = false;
-        }
-        if (state.createFormCard) {
-            state.createFormCard.hidden = false;
-        }
-        if (state.deleteFormCard) {
-            state.deleteFormCard.hidden = false;
-        }
-        if (state.updateFeedback) {
-            state.updateFeedback.hidden = true;
-            state.updateFeedback.textContent = '';
-        }
-        setPageTitle?.('Teams');
     }
 
     function updateDeleteOptions(state) {
@@ -306,6 +251,49 @@
             placeholder: 'Select a team…',
             preserveValue: true
         });
+    }
+
+    function showListView(state) {
+        if (state.listView) {
+            state.listView.hidden = false;
+        }
+        if (state.editView) {
+            state.editView.hidden = true;
+        }
+        setPageTitle?.('Teams');
+    }
+
+    function showEditView(state) {
+        if (state.listView) {
+            state.listView.hidden = true;
+        }
+        if (state.editView) {
+            state.editView.hidden = false;
+        }
+    }
+
+    function hideEditForm(state) {
+        showListView(state);
+        state.editingTeamName = null;
+        state.editForm?.reset();
+    }
+
+    function populateEditForm(state, team) {
+        if (!state.editCard) {
+            return;
+        }
+        state.editingTeamName = team.name;
+
+        if (state.editNameInput) {
+            state.editNameInput.value = team.name || '';
+        }
+        if (state.editDescriptionInput) {
+            state.editDescriptionInput.value = team.description || '';
+        }
+
+        showEditView(state);
+        setPageTitle?.(`Teams · ${team.name}`);
+        state.editDescriptionInput?.focus();
     }
 
     async function loadTeams(state, helpers) {
@@ -326,47 +314,6 @@
             state.counter.textContent = '0';
             helpers.list.show(error.message || 'Failed to fetch teams.', 'error');
         }
-    }
-
-    function handleUpdateForm(state, helpers) {
-        if (!state.updateForm) {
-            return;
-        }
-
-        state.updateForm.addEventListener('submit', async event => {
-            event.preventDefault();
-            helpers.update.hide();
-
-            const name = state.detailNameInput?.value?.trim();
-            const description = state.detailDescriptionInput?.value?.trim();
-
-            if (!name) {
-                helpers.update.show('Unable to identify the selected team.', 'error');
-                return;
-            }
-
-            if (!description) {
-                helpers.update.show('Description is required to update the team.', 'error');
-                return;
-            }
-
-            try {
-                const response = await fetchJSON(apiUrl(`/team/${encodeURIComponent(name)}`), {
-                    method: 'PATCH',
-                    body: JSON.stringify({ description })
-                });
-
-                if (!response || response.status === false) {
-                    throw new Error('The team could not be updated.');
-                }
-
-                await loadTeams(state, helpers);
-                switchToDetailView(state, { name, description });
-                helpers.update.show('Team updated successfully.', 'success');
-            } catch (error) {
-                helpers.update.show(error.message || 'Failed to update team.', 'error');
-            }
-        });
     }
 
     function handleCreateForm(state, helpers) {
@@ -435,6 +382,74 @@
         });
     }
 
+    function handleEditForm(state, helpers) {
+        if (!state.editForm) {
+            return;
+        }
+        state.editForm.addEventListener('submit', async event => {
+            event.preventDefault();
+            helpers.edit.hide();
+
+            if (!state.editingTeamName) {
+                helpers.edit.show('Select a team to edit.', 'error');
+                return;
+            }
+
+            const description = state.editDescriptionInput?.value?.trim() || null;
+
+            try {
+                const response = await fetchJSON(apiUrl(`/team/${encodeURIComponent(state.editingTeamName)}`), {
+                    method: 'PATCH',
+                    body: JSON.stringify({ description })
+                });
+
+                if (!response || response.status === false) {
+                    throw new Error('The team could not be updated.');
+                }
+
+                await loadTeams(state, helpers);
+                hideEditForm(state);
+                helpers.list.show(`Team "${state.editingTeamName}" updated successfully.`, 'success');
+            } catch (error) {
+                helpers.edit.show(error.message || 'Failed to update team.', 'error');
+            }
+        });
+
+        state.editCancel?.addEventListener('click', () => {
+            helpers.edit.hide();
+            hideEditForm(state);
+        });
+    }
+
+    function attachTeamRowInteractions(state, helpers) {
+        if (!state.rowsBody) {
+            return;
+        }
+        state.rowsBody.addEventListener('click', async event => {
+            const row = event.target.closest('tr[data-team-name]');
+            if (!row) {
+                return;
+            }
+            const name = row.getAttribute('data-team-name');
+            const description = row.getAttribute('data-team-description') || '';
+            if (!name) {
+                return;
+            }
+            helpers.edit.hide();
+            populateEditForm(state, { name, description });
+        });
+    }
+
+    function setupBackButton(state, helpers) {
+        if (!state.backToListBtn) {
+            return;
+        }
+        state.backToListBtn.addEventListener('click', () => {
+            helpers.edit.hide();
+            hideEditForm(state);
+        });
+    }
+
     function setupFormToggle(button, card, helpers, options = {}) {
         const { openLabel, closeLabel } = options;
         const toggle = createFormToggle({
@@ -466,7 +481,7 @@
             list: createMessageHelper(state.listFeedback),
             create: createMessageHelper(state.createFeedback),
             delete: createMessageHelper(state.deleteFeedback),
-            update: createMessageHelper(state.updateFeedback)
+            edit: createMessageHelper(state.editFeedback)
         };
 
         state.setCreateVisible = setupFormToggle(state.createToggle, state.createFormCard, helpers.create, {
@@ -481,7 +496,8 @@
         loadTeams(state, helpers);
         handleCreateForm(state, helpers);
         handleDeleteForm(state, helpers);
-        handleUpdateForm(state, helpers);
-        state.detailBackButton?.addEventListener('click', () => switchToListView(state));
+        handleEditForm(state, helpers);
+        attachTeamRowInteractions(state, helpers);
+        setupBackButton(state, helpers);
     });
 })();

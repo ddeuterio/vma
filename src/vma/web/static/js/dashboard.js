@@ -83,7 +83,31 @@
 
         try {
             const stats = await fetchJSON(apiUrl('/stats'));
-            renderDashboard(stats || {});
+            const baseStats = stats || {};
+
+            let repositoriesCount = null;
+            try {
+                const productsPayload = await fetchJSON(apiUrl('/products'));
+                const products = Array.isArray(productsPayload?.result) ? productsPayload.result : (Array.isArray(productsPayload) ? productsPayload : []);
+                const teams = Array.from(new Set(products.map(product => product.team ?? product.team_id ?? product[2]).filter(Boolean)));
+                if (teams.length) {
+                    const repoResponses = await Promise.all(teams.map(async team => {
+                        const repoPayload = await fetchJSON(apiUrl(`/repo/${encodeURIComponent(team)}`));
+                        return Array.isArray(repoPayload?.result) ? repoPayload.result.length : (Array.isArray(repoPayload) ? repoPayload.length : 0);
+                    }));
+                    repositoriesCount = repoResponses.reduce((sum, count) => sum + count, 0);
+                } else {
+                    repositoriesCount = 0;
+                }
+            } catch {
+                repositoriesCount = null;
+            }
+
+            if (repositoriesCount !== null) {
+                baseStats.repositories = repositoriesCount;
+            }
+
+            renderDashboard(baseStats);
         } catch (error) {
             clearElement(root);
             root.appendChild(
