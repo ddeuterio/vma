@@ -190,7 +190,6 @@ CREATE INDEX idx_image_vuln_team ON image_vulnerabilities(team);
 -- Maps directly to VulnerabilitySca Pydantic model
 -- No dependency on NVD vulnerabilities table
 CREATE TABLE vulnerabilities_sca (
-    -- Primary identification
     scanner TEXT NOT NULL,
     vuln_id TEXT NOT NULL,
     source TEXT NOT NULL,
@@ -199,7 +198,7 @@ CREATE TABLE vulnerabilities_sca (
     image_name TEXT NOT NULL,
     image_version TEXT NOT NULL,
     product TEXT NOT NULL,
-    team TEXT NOT NULL REFERENCES teams(name) ON DELETE CASCADE,
+    team TEXT NOT NULL,
 
     -- Core vulnerability data
     description TEXT,
@@ -265,9 +264,23 @@ COMMENT ON COLUMN vulnerabilities_sca.match_details IS 'Array of match detail ob
 
 -- Standalone SAST vulnerability storage (Semgrep findings)
 -- Code-level issues linked to products/teams (no image association)
+CREATE TABLE repositories (
+    product TEXT NOT NULL,
+    team TEXT NOT NULL REFERENCES teams(name) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    PRIMARY KEY (product, team, name),
+    FOREIGN KEY (product, team) REFERENCES products(id, team) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_repositories_team ON repositories(team);
+CREATE INDEX idx_repositories_product ON repositories(product);
+
+
 CREATE TABLE vulnerabilities_sast (
     scanner TEXT NOT NULL,
     rule_id TEXT NOT NULL,
+    repository TEXT NOT NULL,
     product TEXT NOT NULL,
     team TEXT NOT NULL REFERENCES teams(name) ON DELETE CASCADE,
     file_path TEXT NOT NULL,
@@ -294,9 +307,14 @@ CREATE TABLE vulnerabilities_sast (
     validation_state TEXT,
     first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (scanner, rule_id, product, team, file_path, start_line, start_col)
+    PRIMARY KEY (scanner, rule_id, product, team, repository, file_path, start_line, start_col),
+    FOREIGN KEY (product, team) REFERENCES products(id, team) ON DELETE CASCADE,
+    FOREIGN KEY (repository, product, team)
+        REFERENCES repositories(name, product, team)
+        ON DELETE CASCADE
 );
 
+CREATE INDEX idx_vuln_sast_repo ON vulnerabilities_sast(repository);
 CREATE INDEX idx_vuln_sast_team ON vulnerabilities_sast(team);
 CREATE INDEX idx_vuln_sast_product ON vulnerabilities_sast(product);
 CREATE INDEX idx_vuln_sast_severity ON vulnerabilities_sast(severity);
