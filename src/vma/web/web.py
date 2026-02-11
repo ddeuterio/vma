@@ -74,13 +74,10 @@ def create_web_app():
             token_endp = request.app.url_path_for("token")
             payload = {"username": form["username"], "password": form["password"]}
 
-            # Call the API endpoint using configured internal URL
-            async with (
-                AsyncClient(
-                    base_url="http://localhost:80",
-                    verify=False,  # TODO: this might give trouble when not using the docker compose setup
-                ) as client
-            ):
+            # Call the API endpoint using the request's own base URL
+            # This works for both Docker and local development
+            base_url = f"{request.url.scheme}://{request.url.netloc}"
+            async with AsyncClient(base_url=base_url, verify=False) as client:
                 res = await client.post(token_endp, data=payload)
 
             if res.status_code != status.HTTP_200_OK:
